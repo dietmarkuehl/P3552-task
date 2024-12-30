@@ -288,11 +288,17 @@ no particular order):
     least for the coroutine frame. To support the use in environments
     where memory allocations using `new`/`delete` aren't supported
     the coroutine task should support allocations using allocators.
-6. Receivers have associated environments with attributes which are
-    generally forwarded. It should be possible to provide a
-    user-customisable environment from the receiver used by `co_await`
-    expressions. On aspect of this is to forward stop requests to
-    `co_await`ed child operations.
+6. Receivers have associated environments which can support an open
+    set of queries. Normally, queries on an environment can be
+    forwarded to the environment of a `connect()`ed receiver.
+    Since the coroutine types are determined before the coroutines
+    receiver is known and the queries themselves don't specify a
+    result type that isn't possible when a coroutine provides a
+    receiver to a sender in a `co_await` expression. It should still
+    be possible to provide a user-customisable environment from the
+    receiver used by `co_await` expressions. One aspect of this
+    environment is to forward stop requests to `co_await`ed child
+    operations.
 7. The coroutine should be able to indicate that it was cancelled,
     i.e., to get `set_stopped()` called on the task's receiver.
     `std::execution::with_awaitable_senders` already provided this
