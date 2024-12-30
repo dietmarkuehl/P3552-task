@@ -289,7 +289,7 @@ no particular order):
     where memory allocations using `new`/`delete` aren't supported
     the coroutine task should support allocations using allocators.
 6. Receivers have associated environments with attributes which are
-    generally forwarded. It should be possible to provide provide a
+    generally forwarded. It should be possible to provide a
     user-customisable environment from the receiver used by `co_await`
     expressions. On aspect of this is to forward stop requests to
     `co_await`ed child operations.
