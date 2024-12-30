@@ -275,7 +275,7 @@ no particular order):
     asynchronous code is often written using coroutines awaiting
     senders. However, it isn't as obvious as not all senders will
     necessarily be awaitable. For example neither unifex nor stdexec
-    support senders with more than `set_value` completion.
+    support senders with more than one `set_value` completion.
 4. It is possibly confusing and problematic if coroutines resume on
     a different execution context than the one they were suspended
     on.  Senders could, however, complete on an entirely different
