@@ -57,6 +57,13 @@ namespace demo
         }
 
         struct scheduler {
+            using scheduler_concept = ex::scheduler_t;
+            struct env {
+                thread_pool* pool;
+
+                template <typename T>
+                scheduler query(ex::get_completion_scheduler_t<T> const&) const noexcept { return { this->pool }; }
+            };
             template <typename Receiver>
             struct state final
                 : thread_pool::node {
@@ -88,6 +95,8 @@ namespace demo
                 state<Receiver> connect(Receiver&& receiver) {
                     return state<Receiver>(std::forward<Receiver>(receiver), pool);
                 }
+
+                env get_env() const noexcept { return { this->pool }; }
             };
             thread_pool* pool;
             sender schedule() {
@@ -97,6 +106,8 @@ namespace demo
         };
         scheduler get_scheduler() { return { this }; }
     };
+
+    static_assert(ex::scheduler<thread_pool::scheduler>);
 
 } // namespace demo
 
