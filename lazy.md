@@ -326,7 +326,7 @@ into an awaitable and is expected to be used by custom written
 coroutines. Likewise, it is intended that custom coroutines use
 the CRTP class template `std::execution::with_awaitable_senders`.
 It may be reasonable to adjust the functionality of these components
-instead of definiting the functionality specific to a `lazy<...>`
+instead of defining the functionality specific to a `lazy<...>`
 coroutine task.
 
 It is important to note that different coroutine task implementations
