@@ -292,7 +292,7 @@ no particular order):
 6. Receivers have associated environments which can support an open
     set of queries. Normally, queries on an environment can be
     forwarded to the environment of a `connect()`ed receiver.
-    Since the coroutine types are determined before the coroutines
+    Since the coroutine types are determined before the coroutine's
     receiver is known and the queries themselves don't specify a
     result type that isn't possible when a coroutine provides a
     receiver to a sender in a `co_await` expression. It should still
