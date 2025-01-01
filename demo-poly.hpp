@@ -16,20 +16,20 @@ namespace demo {
     {
     private:
         std::array<std::byte, Size>  buf{};
-        Base*                        ptr{};
+        Base*       pointer()       { return static_cast<Base*>(static_cast<void*>(buf.data())); }
+        Base const* pointer() const { return static_cast<Base const*>(static_cast<void const*>(buf.data())); }
 
     public:
         template <typename T, typename... Args>
-        poly(T*, Args&&... args)
-            : ptr(new(this->buf.data()) T(::std::forward<Args>(args)...))
-        {
+        poly(T*, Args&&... args) {
+            new(this->buf.data()) T(::std::forward<Args>(args)...);
             static_assert(sizeof(T) <= Size);
         }
-        poly(poly&& other): ptr(other.ptr->move(this->buf.data())){}
-        poly(poly const& other): ptr(other.ptr->clone(this->buf.data())){}
-        ~poly() { this->ptr->~Base(); }
-        bool operator== (poly const& other) const { return other.ptr->equals(this); }
-        Base* operator->() { return this->ptr; }
+        poly(poly&& other) { other.pointer()->move(this->buf.data()); }
+        poly(poly const& other) { other.pointer()->clone(this->buf.data()); }
+        ~poly() { this->pointer()->~Base(); }
+        bool operator== (poly const& other) const { return other.pointer()->equals(this); }
+        Base* operator->() { return this->pointer(); }
     };
 }
 

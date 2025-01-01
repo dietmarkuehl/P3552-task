@@ -28,7 +28,12 @@ namespace demo
         std::error_code error;
     };
 
-    template <typename T>
+    struct default_context
+    {
+        static bool constexpr scheduler_affine{true};
+    };
+
+    template <typename T, typename C = default_context>
     struct task {
         template <typename R>
         struct completion { using type = ex::set_value_t(R); };
@@ -82,8 +87,10 @@ namespace demo
             task get_return_object() { return { std::coroutine_handle<promise_type>::from_promise(*this)}; }
             template <ex::sender Sender>
             auto await_transform(Sender&& sender) noexcept {
-                return ex::as_awaitable(ex::continues_on(sender, *(this->scheduler)), *this);
-                //return ex::as_awaitable(sender, *this);
+                if constexpr (C::scheduler_affine)
+                    return ex::as_awaitable(ex::continues_on(sender, *(this->scheduler)), *this);
+                else
+                    return ex::as_awaitable(sender, *this);
             }
             template <demo::awaiter Awaiter>
             auto await_transform(Awaiter&&) noexcept  = delete;

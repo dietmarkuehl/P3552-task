@@ -90,7 +90,7 @@ namespace demo {
             struct base {
                 virtual ~base() = default;
                 virtual base* move(void*) = 0;
-                virtual base* clone(void*) = 0;
+                virtual base* clone(void*) const = 0;
                 virtual inner_state connect(state_base*) = 0;
             };
             template <ex::scheduler Scheduler>
@@ -102,7 +102,7 @@ namespace demo {
                 template <ex::scheduler S>
                 concrete(S&& s): sender(ex::schedule(std::forward<S>(s))) {}
                 base* move(void* buffer) override { return new(buffer) concrete(std::move(*this)); }
-                base* clone(void*buffer) override { return new(buffer) concrete(*this); }
+                base* clone(void*buffer) const override { return new(buffer) concrete(*this); }
                 inner_state connect(state_base* b) override {
                     return inner_state(::std::move(sender), b);
                 }
@@ -131,7 +131,7 @@ namespace demo {
             virtual ~base() = default;
             virtual sender schedule() = 0;
             virtual base* move(void* buffer) = 0;
-            virtual base* clone(void*) = 0;
+            virtual base* clone(void*) const = 0;
             virtual bool equals(base const*) const = 0;
         };
         template <ex::scheduler Scheduler>
@@ -142,7 +142,7 @@ namespace demo {
             explicit concrete(S&& s): scheduler(std::forward<S>(s)) {}
             sender schedule() override { return sender(this->scheduler); }
             base* move(void* buffer) override { return new(buffer) concrete(std::move(*this)); }
-            base* clone(void*buffer) override { return new(buffer) concrete(*this); }
+            base* clone(void*buffer) const override { return new(buffer) concrete(*this); }
             bool equals(base const* o) const override {
                 auto other{dynamic_cast<concrete const*>(o)};
                 return other? this->scheduler == other->scheduler: false;
