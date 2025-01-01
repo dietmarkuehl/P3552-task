@@ -311,7 +311,7 @@ no particular order):
 9. In general a task has to assume that an exception escapes a the
     coroutine implementation. As a result, the task's completion
     signatures need to include `set_error_t(std::exception_ptr)`.
-    If it can be indicated to the tas that no exception will escape
+    If it can be indicated to the task that no exception will escape
     the coroutine, this completion signature can be avoided.
 10. When many `co_await`ed operations complete synchronously, there
     is a chance for stack overflow. It may be reasonable to have
