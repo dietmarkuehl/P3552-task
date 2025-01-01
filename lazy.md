@@ -167,13 +167,17 @@ relevant treatment is in the promise type's `await_transform()`:
 - If a sender `s` which is result of `schedule(scheduler)` is
   `co_await`ed, the corresponding `scheduler` is installed as the
   task's scheduler and the task resume on the result of completing
-  `s`.
+  `s`. Feedback from people working with unifex suggests that this
+  choice for changing the scheduler is too subtle. While it is
+  considered important to explicitly change the scheduler a task
+  executes on, doing so should be more explicit.
 - For both senders and awaiters being awaited, the coroutine
   will be resumed on the task's current scheduler when the task is
-  scheduler affine unless the sender algorithm is tagged to inhibit
-  transfer to the current scheduler (using a `static constexpr`
-  member named `blocking` which is initialised to
-  `blocking_kind::always_inline`).
+  scheduler affine. In general that is done by continuing with the
+  senders result on the task's scheduler, similar to `continues_on(sender,
+  scheduler)`. The rescheduling is avoided when the sender is tagged
+  as not changing scheduler (using a `static constexpr` member named
+  `blocking` which is initialised to `blocking_kind::always_inline`).
 - If a sender `s` is `co_await`ed it gets `connect`ed to a receiver
   provided by the task to form an awaiter holding the operation
   state which gets `start`ed by the awaiter's `await_suspend`. The
@@ -262,29 +266,49 @@ Based on the prior work and discussions around corresponding coroutine
 support there a number of required or desired features (listed in
 no particular order):
 
-1. A coroutine task needs to be awaiter/awaitable friendly. While
-    that seems obvious, it is, e.g., possible to create an
-    `await_transform` which is deleted for awaiters.
-2. For sender algorithms it is common to adapt the results using
-    suitable algorithms. When awaiting sender in a coroutine it may
-    be annoying having to transform the result into a shape which
-    is friendly to a coroutine use. Thus, it may be reasonable to
-    support rewriting certain shapes of completion signatures into
-    something different to make the use of senders easier in a
-    coroutine task.
+1. A coroutine task needs to be awaiter/awaitable friendly, i.e., it
+    should be possibly to `co_await` awaitables. While that seems
+    obvious, it is possible to create an `await_transform` which
+    is deleted for awaiters.
+2. When composing sender algorithms without using a coroutine it
+    is common to adapt the results using suitable algorithms and
+    the completions for sender algorithms are designed accordingly.
+    On the other hand, when awaiting senders in a coroutine it may
+    be annoying considered having to transform the result into a
+    shape which is friendly to a coroutine use. Thus, it may be
+    reasonable to support rewriting certain shapes of completion
+    signatures into something different to make the use of senders
+    easier in a coroutine task.
 3. A coroutine task needs to be sender friendly: it is expected that
     asynchronous code is often written using coroutines awaiting
-    senders. However, it isn't as obvious as not all senders will
-    necessarily be awaitable. For example neither unifex nor stdexec
-    support senders with more than one `set_value` completion.
+    senders. However, depending on how senders are treated by a
+    coroutine some senders may not be awaitable. For example neither
+    unifex nor stdexec support `co_await`ing senders with more than
+    one `set_value` completion.
 4. It is possibly confusing and problematic if coroutines resume on
     a different execution context than the one they were suspended
-    on.  Senders could, however, complete on an entirely different
-    scheduler than where they started. As a result, a coroutine
-    task should be scheduler affine by default, i.e., it should
-    always resume on the same scheduler. There should probably be
-    a way to opt out of scheduler affinity when the implications are
-    well understood.
+    on: the textual similarity to normal functions makes it look
+    as if things are executed sequentially. Experience also indicates
+    that continuing a coroutine on whatever context a `co_await`ed
+    operation completes frequently leads to issues. Senders could,
+    however, complete on an entirely different scheduler than where
+    they started. When composing senders (not using coroutines)
+    changing contexts is probably OK because it is done deliberately,
+    e.g., using `continues_on`, and the way to express things is
+    new with fewer attached expectations.
+    
+    To bring these two views
+    together a coroutine task should be scheduler affine by default,
+    i.e., it should normally resume on the same scheduler. There
+    should probably also be an explicit way to opt out of scheduler
+    affinity when the implications are well understood.
+
+    Note that scheduler affinity does _not_ mean that a task is
+    always continuing on the same thread: a scheduler may refer to
+    a thread pool and the task will continue on one of the threads
+    (which also means that thread local storage cannot be used to
+    propagate contexts implicitly; see the discussion on environments
+    below).
 5. When using coroutines there will probably be an allocation at
     least for the coroutine frame. To support the use in environments
     where memory allocations using `new`/`delete` aren't supported
@@ -299,7 +323,12 @@ no particular order):
     be possible to provide a user-customisable environment from the
     receiver used by `co_await` expressions. One aspect of this
     environment is to forward stop requests to `co_await`ed child
-    operations.
+    operations. Another is possibly changing the scheduler to be
+    used when a child operation queries `get_scheduler` from the
+    receiver's environment. Also, in non-asynchronous code it is
+    quite common to pass some form of context implicitly using
+    thread local storage. In an asynchronous world the such contexts
+    could be forwarded using the environment.
 7. The coroutine should be able to indicate that it was cancelled,
     i.e., to get `set_stopped()` called on the task's receiver.
     `std::execution::with_awaitable_senders` already provided this
@@ -452,7 +481,9 @@ can be explicitly specified:
     needs to be type-erased in some form
 - What should happen if there is no `get_scheduler(env)`? Require a
     scheduler (unifex), use an inline scheduler (stdexec), or something
-    else?
+    else? Using an inline scheduler effectively means there is no
+    scheduler affinity which probably leads to many issues (which is
+    backed up by usage reports)
 - Provide the definition of an inline scheduler to inhibit scheduler
     affinity, i.e., avoiding the cost of scheduling.
 - Allow avoiding scheduling, probably using a suitable tag for the
