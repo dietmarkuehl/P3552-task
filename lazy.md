@@ -179,8 +179,9 @@ relevant treatment is in the promise type's `await_transform()`:
   state which gets `start`ed by the awaiter's `await_suspend`. The
   receiver arranges for the `set_value` completion to become a
   result return from `await_resume`, a `set_error` completon to
-  become an exception, and a `set_done` completion to not resume
-  the task.
+  become an exception, and a `set_done` completion to resume an
+  a special "on done" coroutine handle rather than resuming the task
+  itself.
 
 When `co_await`ing a sender `s` there can be at most one `set_value`
 completion: if there is more than one `set_value` completion the
