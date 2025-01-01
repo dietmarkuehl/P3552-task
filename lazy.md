@@ -69,7 +69,7 @@ are details on how the coroutine is implemented.
 
 [Discussion for P1056r0 in SG1](https://wiki.edg.com/bin/view/Wg21rapperswil2018/P1056R0)
 
-- The task doesn't really have to anything with concurrency.
+- The task doesn't really have anything to do with concurrency.
 - Decomposing a task cheaply is fundamental. The [HALO
   Optimisations](https://wg21.link/P0981R0) help.
 - The `task` isn't move assignable because there are better approaches
