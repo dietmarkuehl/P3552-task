@@ -158,7 +158,7 @@ places. The implementation includes a
 As `libunifex` is sender/receiver-based, its `unifex::task<T>` is
 implemented such that `co_await` can deal with senders in addition
 to awaitables or awaiters. Also, `unifex::task<T>` is _scheduler
-affine_: the coroutine code resume on the same scheduler even if a
+affine_: the coroutine code resumes on the same scheduler even if a
 sender completed on a different scheduler. The corresponding scheduler
 is taken from the receiver.  The exception for this rule is when
 explicitly awaiting the result of `scheduler(scheduler)`.  The
