@@ -17,14 +17,23 @@ namespace demo {
     struct any_scheduler {
         struct state_base {
             virtual ~state_base() = default;
-            virtual void complete() = 0;
+            virtual void complete_value() = 0;
+            virtual void complete_error(std::exception_ptr) = 0;
+            virtual void complete_stopped() = 0;
         };
 
         struct inner_state {
             struct receiver {
                 using receiver_concept = ex::receiver_t;
                 state_base* state;
-                void set_value() && noexcept { this->state->complete(); }
+                void set_value() && noexcept { this->state->complete_value(); }
+                void set_error(std::exception_ptr ptr) && noexcept { this->state->complete_error(std::move(ptr)); }
+                template <typename E>
+                void set_error(E e) {
+                    try { throw std::move(e); }
+                    catch (...) { this->state->complete_error(std::current_exception()); }
+                }
+                void set_stopped() && noexcept { this->state->complete_stopped(); }
             };
             static_assert(ex::receiver<receiver>);
 
@@ -67,13 +76,21 @@ namespace demo {
             void start() & noexcept {
                 this->s.start();
             }
-            void complete() override { ex::set_value(std::move(this->receiver)); }
+            void complete_value() override { ex::set_value(std::move(this->receiver)); }
+            void complete_error(std::exception_ptr ptr) override { ex::set_error(std::move(receiver), std::move(ptr)); }
+            void complete_stopped() override { ex::set_stopped(std::move(this->receiver)); }
+        };
+
+        struct env {
+            any_scheduler query(ex::get_completion_scheduler_t<ex::set_value_t> const&) const noexcept;
         };
 
         // sender implementation
         struct sender {
             struct base {
                 virtual ~base() = default;
+                virtual base* move(void*) = 0;
+                virtual base* clone(void*) = 0;
                 virtual inner_state connect(state_base*) = 0;
             };
             template <ex::scheduler Scheduler>
@@ -84,6 +101,8 @@ namespace demo {
 
                 template <ex::scheduler S>
                 concrete(S&& s): sender(ex::schedule(std::forward<S>(s))) {}
+                base* move(void* buffer) override { return new(buffer) concrete(std::move(*this)); }
+                base* clone(void*buffer) override { return new(buffer) concrete(*this); }
                 inner_state connect(state_base* b) override {
                     return inner_state(::std::move(sender), b);
                 }
@@ -94,35 +113,56 @@ namespace demo {
             poly<base, 4 * sizeof(void*)> inner_sender;
 
             template <ex::scheduler S>
-            sender(S&& s)
+            explicit sender(S&& s)
                 : inner_sender(static_cast<concrete<S>*>(nullptr), std::forward<S>(s))
             {
             }
+            sender(sender&&) = default;
+            sender(sender const&) = default;
 
             template <ex::receiver R>
             state<R> connect(R&& r) { return state<R>(std::forward<R>(r), this->inner_sender); }
+
+            env get_env() const noexcept { return {}; }
         };
 
         // scheduler implementation
         struct base {
             virtual ~base() = default;
             virtual sender schedule() = 0;
+            virtual base* move(void* buffer) = 0;
+            virtual base* clone(void*) = 0;
+            virtual bool equals(base const*) const = 0;
         };
-        template <typename Scheduler>
+        template <ex::scheduler Scheduler>
         struct concrete
             : base {
             Scheduler scheduler;
-            template <typename S>
-            concrete(S&& s): scheduler(std::forward<S>(s)) {}
-            sender schedule() { return sender(this->scheduler); }
+            template <ex::scheduler S>
+            explicit concrete(S&& s): scheduler(std::forward<S>(s)) {}
+            sender schedule() override { return sender(this->scheduler); }
+            base* move(void* buffer) override { return new(buffer) concrete(std::move(*this)); }
+            base* clone(void*buffer) override { return new(buffer) concrete(*this); }
+            bool equals(base const* o) const override {
+                auto other{dynamic_cast<concrete const*>(o)};
+                return other? this->scheduler == other->scheduler: false;
+            }
         };
 
         poly<base, 4 * sizeof(void*)> scheduler;
         
+        using scheduler_concept = ex::scheduler_t;
+
         template <typename S>
-        any_scheduler(S&& s): scheduler(static_cast<concrete<std::decay_t<S>>*>(nullptr), std::forward<S>(s)) {}
+            requires (not std::same_as<any_scheduler, std::remove_cvref_t<S>>)
+        explicit any_scheduler(S&& s): scheduler(static_cast<concrete<std::decay_t<S>>*>(nullptr), std::forward<S>(s)) {}
+        any_scheduler(any_scheduler&& other) = default;
+        any_scheduler(any_scheduler const& other) = default;
         sender schedule() { return this->scheduler->schedule(); }
+
+        bool operator== (any_scheduler const&) const = default;
     };
+    static_assert(ex::scheduler<any_scheduler>);
 }
 
 // ----------------------------------------------------------------------------

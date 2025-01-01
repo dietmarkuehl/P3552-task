@@ -4,6 +4,7 @@
 #ifndef INCLUDED_DEMO_POLY
 #define INCLUDED_DEMO_POLY
 
+#include <concepts>
 #include <new>
 #include <cstddef>
 
@@ -11,34 +12,24 @@
 
 namespace demo {
     template <typename Base, std::size_t Size>
-    class alignas(sizeof(double)) poly_base {
-        std::array<std::byte, Size>  buffer{};
-        void* data() { return buffer.data(); }
-    
-    protected:
-        Base* ptr()  { return static_cast<Base*>(this->data()); }
+    class alignas(sizeof(double)) poly
+    {
+    private:
+        std::array<std::byte, Size>  buf{};
+        Base*                        ptr{};
 
     public:
         template <typename T, typename... Args>
-        poly_base(T*, Args&&... args) {
+        poly(T*, Args&&... args)
+            : ptr(new(this->buf.data()) T(::std::forward<Args>(args)...))
+        {
             static_assert(sizeof(T) <= Size);
-            new(this->data()) T(::std::forward<Args>(args)...);
         }
-        ~poly_base() { this->ptr()->~Base(); }
-        Base* operator->() { return this->ptr(); }
-    };
-    template <typename Base, std::size_t Size, bool = requires(Base* b){ b->move(nullptr); }>
-    class poly
-        : public poly_base<Base, Size> {
-    public:
-        using poly_base<Base, Size>::poly_base;
-        poly(poly&&) { this->ptr()->move(this->data); }
-    };
-    template <typename Base, std::size_t Size>
-    class poly<Base, Size, false>
-        : public poly_base<Base, Size> {
-    public:
-        using poly_base<Base, Size>::poly_base;
+        poly(poly&& other): ptr(other.ptr->move(this->buf.data())){}
+        poly(poly const& other): ptr(other.ptr->clone(this->buf.data())){}
+        ~poly() { this->ptr->~Base(); }
+        bool operator== (poly const& other) const { return other.ptr->equals(this); }
+        Base* operator->() { return this->ptr; }
     };
 }
 

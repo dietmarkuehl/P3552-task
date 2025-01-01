@@ -3,6 +3,7 @@
 
 #include <beman/execution26/execution.hpp>
 #include "demo-any_scheduler.hpp"
+#include "demo-task.hpp"
 #include "demo-thread_pool.hpp"
 #include <iostream>
 #include <cassert>
@@ -26,7 +27,13 @@ std::ostream& fmt_id(std::ostream& out) { return out << std::this_thread::get_id
 
 int main() {
     demo::thread_pool pool;
-    ex::sync_wait(ex::just() | ex::then([]{ std::cout << "main:" << fmt_id << "\n"; }));
-    ex::sync_wait(ex::schedule(pool.get_scheduler()) | ex::then([]{ std::cout << "pool:" << fmt_id << "\n"; }));
-    ex::sync_wait(ex::schedule(demo::any_scheduler(pool.get_scheduler())) | ex::then([]{ std::cout << "any: " << fmt_id << "\n"; }));
+    ex::sync_wait(ex::just() | ex::then([]()noexcept{ std::cout << "main:" << fmt_id << "\n"; }));
+    ex::sync_wait(ex::schedule(pool.get_scheduler()) | ex::then([]()noexcept{ std::cout << "pool:" << fmt_id << "\n"; }));
+    ex::sync_wait(ex::schedule(demo::any_scheduler(pool.get_scheduler())) | ex::then([]()noexcept{ std::cout << "any: " << fmt_id << "\n"; }));
+    ex::sync_wait([]()->demo::task<void> { std::cout << "coro:" << fmt_id << "\n"; co_return; }());
+    ex::sync_wait([](auto& pool)->demo::task<void> {
+        std::cout << "cor1:" << fmt_id << "\n";
+        co_await (ex::schedule(pool.get_scheduler()) | ex::then([]{ std::cout << "then:" << fmt_id << "\n"; }));
+        std::cout << "cor2:" << fmt_id << "\n";
+        }(pool));
 }
