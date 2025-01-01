@@ -190,7 +190,7 @@ completion: if there is more than one `set_value` completion the
 result type of `co_await s` depends on the number of arguments to
 `set_value`:
 
-- If there is no for `set_value`  then the type of `co_await s`
+- If there are no arguments for `set_value`  then the type of `co_await s`
     will be `void`.
 - If there is exactly one argument of type `T` for `set_value`
     then the type of `co_await s` will be `T`.
