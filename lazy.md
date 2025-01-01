@@ -221,10 +221,10 @@ is a total of 6 allocations for each `unifex::task<T>` being created.
 After that, it seem the different `co_await`s don't use a separate
 allocation.
 
-The `unifex::task<T>` doesn't guard against stack overflow directly
-guard against stack overflow. Due to rescheduling continuations on
-a scheduler when the completion isn't always inlne, the issue only
-arises when `co_await`ing many senders with `blocking_kind::always_inline`.
+The `unifex::task<T>` doesn't directly guard against stack overflow.
+Due to rescheduling continuations on a scheduler when the completion
+isn't always inline, the issue only arises when `co_await`ing many
+senders with `blocking_kind::always_inline`.
 
 ## [stdexec](https://github.com/NVIDIA/stdexec)
 
