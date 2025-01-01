@@ -1,4 +1,4 @@
-// demo-affine.cpp                                                    -*-C++-*-
+// demo-affinity.cpp                                                  -*-C++-*-
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include <beman/execution26/execution.hpp>

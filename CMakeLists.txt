@@ -20,7 +20,8 @@ list(
   beman-loop
   beman-return
   beman-stopped
-  demo-affine
+  demo-affinity
+  demo-alloc
   demo-friendly
 )
 

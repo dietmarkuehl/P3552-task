@@ -1,6 +1,6 @@
 #include <iostream>
 #include <beman/execution26/execution.hpp>
-#include <beman/task/task.hpp>
+#include "demo-task.hpp"
 
 namespace ex = beman::execution26;
 
@@ -20,13 +20,13 @@ int main()
     ex::sync_wait(ex::just(0));
     std::cout << "just done\n";
 
-    std::cout << "running beman::task\n";
-    ex::sync_wait([]()->beman::task::task<void>{
+    std::cout << "running demo::task\n";
+    ex::sync_wait([]()->demo::task<void>{
         using on_exit = std::unique_ptr<char const, decltype([](auto msg){ std::cout << msg; })>;
         on_exit exit("task released\n");
         std::cout << "task started\n";
         co_await ex::just(0);
         co_await ex::just(0);
     }());
-    std::cout << "beman::task::task done\n";
+    std::cout << "demo::task done\n";
 }
