@@ -3,6 +3,7 @@
 
 #include <beman/execution26/execution.hpp>
 #include "demo-any_scheduler.hpp"
+#include "demo-inline_scheduler.hpp"
 #include "demo-task.hpp"
 #include "demo-thread_pool.hpp"
 #include <iostream>
@@ -41,10 +42,18 @@ int main() {
         co_await (ex::schedule(pool.get_scheduler()) | ex::then([]{ std::cout << "then:" << fmt_id << "\n"; }));
         std::cout << "cor2:" << fmt_id << "\n";
         }(pool));
+
     std::cout << "not scheduler affine:\n";
     ex::sync_wait([](auto& pool)->demo::task<void, non_affine> {
         std::cout << "cor1:" << fmt_id << "\n";
         co_await (ex::schedule(pool.get_scheduler()) | ex::then([]{ std::cout << "then:" << fmt_id << "\n"; }));
         std::cout << "cor2:" << fmt_id << "\n";
         }(pool));
+
+    std::cout << "use inline_scheduler:\n";
+    ex::sync_wait(ex::starts_on(demo::inline_scheduler{}, [](auto& pool)->demo::task<void> {
+        std::cout << "cor1:" << fmt_id << "\n";
+        co_await (ex::schedule(pool.get_scheduler()) | ex::then([]{ std::cout << "then:" << fmt_id << "\n"; }));
+        std::cout << "cor2:" << fmt_id << "\n";
+        }(pool)));
 }
