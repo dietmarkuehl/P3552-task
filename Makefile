@@ -7,7 +7,7 @@ doc: lazy.pdf
 all: lazy.pdf build
 
 build: beman-task stdexec libunifex
-	cmake -DCMAKE_CXX_STANDARD:STRING=23 -B build 
+	cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_STANDARD:STRING=23 -B build 
 	cmake --build build
 
 beman-task:

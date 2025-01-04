@@ -2,6 +2,7 @@
 # /CMakeLists.txt -*-makefile-*-
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 # cmake-format: on
+# note to self: CXX=/opt/llvm-19.1.6/bin/clang++ LDFLAGS=-fuse-ld=lld mk
 
 cmake_minimum_required(VERSION 3.25...3.31)
 
@@ -19,8 +20,9 @@ list(
   beman-loop
   beman-return
   beman-stopped
+  demo-affinity
+  demo-alloc
   demo-friendly
-  demo-error
 )
 
 list(
