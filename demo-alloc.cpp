@@ -1,7 +1,7 @@
 #include <iostream>
 #include <cstdlib>
 #include <beman/execution26/execution.hpp>
-#include "demo-task.hpp"
+#include "demo-lazy.hpp"
 
 namespace ex = beman::execution26;
 
@@ -21,13 +21,13 @@ int main()
     ex::sync_wait(ex::just(0));
     std::cout << "just done\n";
 
-    std::cout << "running demo::task\n";
-    ex::sync_wait([]()->demo::task<void>{
+    std::cout << "running demo::lazy\n";
+    ex::sync_wait([]()->demo::lazy<void>{
         using on_exit = std::unique_ptr<char const, decltype([](auto msg){ std::cout << msg; })>;
-        on_exit exit("task released\n");
-        std::cout << "task started\n";
+        on_exit exit("lazy released\n");
+        std::cout << "lazy started\n";
         co_await ex::just(0);
         co_await ex::just(0);
     }());
-    std::cout << "demo::task done\n";
+    std::cout << "demo::lazy done\n";
 }
