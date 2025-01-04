@@ -1,8 +1,8 @@
-// demo-task.hpp                                                      -*-C++-*-
+// demo-lazy.hpp                                                      -*-C++-*-
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-#ifndef INCLUDED_DEMO_TASK
-#define INCLUDED_DEMO_TASK
+#ifndef INCLUDED_DEMO_LAZY
+#define INCLUDED_DEMO_LAZY
 
 #include <concepts>
 #include <coroutine>
@@ -33,8 +33,8 @@ namespace demo
         static bool constexpr scheduler_affine{true};
     };
 
-    template <typename T, typename C = default_context>
-    struct task {
+    template <typename T = void, typename C = default_context>
+    struct lazy {
         template <typename R>
         struct completion { using type = ex::set_value_t(R); };
         template <>
@@ -84,7 +84,7 @@ namespace demo
             void unhandled_exception() {
                 this->result.template emplace<std::exception_ptr>(std::current_exception());
             }
-            task get_return_object() { return { std::coroutine_handle<promise_type>::from_promise(*this)}; }
+            lazy get_return_object() { return { std::coroutine_handle<promise_type>::from_promise(*this)}; }
             template <ex::sender Sender>
             auto await_transform(Sender&& sender) noexcept {
                 if constexpr (C::scheduler_affine)
@@ -104,6 +104,13 @@ namespace demo
             state_base* state{};
             
             std::coroutine_handle<> unhandled_stopped() { return {}; }
+
+            struct env {
+                promise_type const* promise;
+                demo::any_scheduler query(ex::get_scheduler_t) const noexcept { return *promise->scheduler; }
+            };
+
+            env get_env() const noexcept { return {this}; }
         };
 
         template <typename Receiver>

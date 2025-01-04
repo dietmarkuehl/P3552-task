@@ -1,14 +1,14 @@
 #include <iostream>
 #include <beman/execution26/execution.hpp>
-#include "demo-task.hpp"
+#include "demo-lazy.hpp"
 
 namespace ex = beman::execution26;
 
-demo::task<int> fun(int i)
+demo::lazy<int> fun(int i)
 {
     using on_exit = std::unique_ptr<char const, decltype([](auto msg){ std::cout << msg << "\n"; })>;
-    on_exit msg("task destroyed");
-    std::cout << "task started\n";
+    on_exit msg("lazy destroyed");
+    std::cout << "lazy started\n";
 
     switch (i) {
     default: break;
