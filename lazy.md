@@ -375,29 +375,61 @@ for whatever reason.
 
 ## Template Declaration for `lazy`
 
-**TODO** turn into text
+Coroutines can have `co_return` a value. The value returned can
+reasonably provide the argument for the `set_value_t` completion
+of the coroutines. As the type of a coroutine is defined even before
+the coroutine body is given, there is no way to deduce the result
+type. The result type is probably the primary customization and
+should be the first template parameter which gets defaulted to
+`void` for coroutines not producing any value. For example:
 
-- Coroutines can `co_return` a value; if no argument is given or
-    no `co_return` is used, the argument type is void
-- The return type `T` can become a value `set_value_t(T)` or
-    `set_value_t()` completion
-- The return type cannot be deduced => it needs to be explicit on
-    `lazy<T>`
-- For various features it is beneficial to have an additional,
-    defaulted template argument for a context (see below for details):
-    - provide an initial environment for child senders
-    - define the default scheduler affinity
-    - define whether coroutine is `noexcept`
-    - define allocator awareness
-    - etc.
-- The default context should be explicity named and provide "safe"
-    defaults
-    - inheriting from the default context can be used to override
-        defaults
-- Having different types for `lazy<T, C>` isn't a problem because
-    these entities aren't stored in containers: instead they are
-    maintained via something like `counting_scope` which starts the
-    work and cleans up upon completion
+    int main() {
+        ex::sync_wait([]->ex::lazy<>{
+            int result = co_await []->ex::lazy<int> { co_return 42; }();
+            assert(result == 42);
+        }());
+    }
+
+The inner coroutines completes with `set_value_t(int)` which gets
+translated to the value returned from `co_await` (see [`co_await`
+result type below](#result-type-for-co_await) for more details).
+The outer coroutine completes with `set_value_t()`.
+
+Beyond the result type there are a number of features for a coroutine
+task which benefit from customization or for which it may be desirable
+to disable them because they introduce a cost. As many template
+parameters become unwieldy, it makes sense to combine these into a
+[defaulted] context parameter. The aspects which benefit from
+customization are at least:
+
+ - [Customizing the environment](#environment-support) for child
+    operations. The context itself can actually become part of
+    the environment.
+ - Disable [scheduler affinity](#scheduler-affinity) and/or configure
+    the strategy for obtaining the coroutine's scheduler.
+ - Disable [allocator awareness](#allocator-support).
+ - Indicate that the coroutine should be [noexcept](#avoiding-set_error_texception_ptr).
+
+The default context should be explicitly named, e.g.,
+`lazy_default_context`, to allow easy customization while avoiding
+issues if future customizations are added. For example, allocator
+suport could be disabled using something like this:
+
+    struct disable_allocator_context
+        : ex::lazy_defaultcontext {
+        static constexpr bool allocator_support{false};
+    };
+    template <typename T>
+    using my_lazy = ex::lazy<T, disable_allocator_context>;
+
+Using various different types for task coroutines isn't a problem
+as the corresponding objects normally don't show up in containers.
+Tasks are mostly `co_await`ed by other tasks, used as child senders
+when composing work graphs, or maintained until completed using
+something like a [`counting_scope`](https://wg21.link/p3149). When
+they are used in a container, e.g., to process data using a range
+of coroutines, they are likely to use the same result type and
+context types for configurations.
 
 ## `lazy` constructors and assignments
 
