@@ -46,7 +46,7 @@ class fixed_resource
     }
 };
 
-struct alloc_aware: demo::default_context {
+struct alloc_aware {
     using allocator_type = std::pmr::polymorphic_allocator<std::byte>;
 };
 

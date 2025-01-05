@@ -42,31 +42,21 @@ namespace demo
     template <typename C, typename... A>
     void* coroutine_allocate(std::size_t size, A const&...a) {
         using allocator_type = demo::allocator_of_t<C>;
-        if constexpr (std::same_as<void, allocator_type>) {
-            return ::operator new(size);
-        }
-        else {
-            using traits = std::allocator_traits<allocator_type>;
-            allocator_type alloc{demo::find_allocator<allocator_type>(a...)};
-            std::byte* ptr{traits::allocate(alloc, size + sizeof(allocator_type))};
-            new(ptr + size) allocator_type(alloc);
-            return ptr;
-        }
+        using traits = std::allocator_traits<allocator_type>;
+        allocator_type alloc{demo::find_allocator<allocator_type>(a...)};
+        std::byte* ptr{traits::allocate(alloc, size + sizeof(allocator_type))};
+        new(ptr + size) allocator_type(alloc);
+        return ptr;
     }
     template <typename C>
     void coroutine_deallocate(void* ptr, std::size_t size) {
         using allocator_type = demo::allocator_of_t<C>;
-        if constexpr (std::same_as<void, allocator_type>) {
-            return ::operator delete(ptr, size);
-        }
-        else {
-            using traits = std::allocator_traits<allocator_type>;
-            void* vptr{static_cast<std::byte*>(ptr) + size};
-            auto* aptr{static_cast<allocator_type*>(vptr)};
-            allocator_type alloc(*aptr);
-            aptr->~allocator_type();
-            traits::deallocate(alloc, static_cast<std::byte*>(ptr), size);
-        }
+        using traits = std::allocator_traits<allocator_type>;
+        void* vptr{static_cast<std::byte*>(ptr) + size};
+        auto* aptr{static_cast<allocator_type*>(vptr)};
+        allocator_type alloc(*aptr);
+        aptr->~allocator_type();
+        traits::deallocate(alloc, static_cast<std::byte*>(ptr), size);
     }
 }
 
