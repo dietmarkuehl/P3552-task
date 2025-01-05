@@ -27,7 +27,7 @@ namespace {
 std::ostream& fmt_id(std::ostream& out) { return out << std::this_thread::get_id(); }
 
 struct non_affine: demo::default_context {
-    static constexpr bool scheduler_affine{false};
+    using scheduler_type = demo::inline_scheduler;
 };
 
 int main() {
@@ -50,10 +50,13 @@ int main() {
         std::cout << "cor2:" << fmt_id << "\n";
         }(pool));
 
+#if 0
+    //-dk:TODO track down what goes wrong with this example!
     std::cout << "use inline_scheduler:\n";
     ex::sync_wait(ex::starts_on(demo::inline_scheduler{}, [](auto& pool)->demo::lazy<void> {
         std::cout << "cor1:" << fmt_id << "\n";
         co_await (ex::schedule(pool.get_scheduler()) | ex::then([]{ std::cout << "then:" << fmt_id << "\n"; }));
         std::cout << "cor2:" << fmt_id << "\n";
         }(pool)));
+#endif
 }

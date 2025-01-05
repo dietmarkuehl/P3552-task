@@ -7,6 +7,7 @@
 #include <beman/execution26/execution.hpp>
 #include "demo-allocator.hpp"
 #include "demo-any_scheduler.hpp"
+#include "demo-inline_scheduler.hpp"
 #include <concepts>
 #include <coroutine>
 #include <iostream>
@@ -32,25 +33,12 @@ namespace demo
 
     struct default_context
     {
-        static bool constexpr scheduler_affine{true};
     };
 
     template <typename T = void, typename C = default_context>
     struct lazy {
-        struct dealloc_base {
-            dealloc_base() = default;
-            virtual ~dealloc_base() = default;
-            virtual dealloc_base* clone(void*) = 0;
-            virtual void deallocate(void*, std::size_t) = 0;
-        };
-        template <typename Alloc>
-        struct dealloc: dealloc_base {
-            Alloc alloc;
-            dealloc_base* clone(void*) override { return new dealloc(*this); }
-            void deallocate(void* ptr, std::size_t size) override {
-                std::allocator_traits<Alloc>::deallocate(this->alloc, ptr, size);
-            }
-        };
+        using allocator_type = demo::allocator_of_t<C>;
+        using scheduler_type = demo::scheduler_of_t<C>;
 
         template <typename R>
         struct completion { using type = ex::set_value_t(R); };
@@ -96,7 +84,6 @@ namespace demo
                 return demo::coroutine_deallocate<C>(ptr, size);
             }
 
-            using allocator_type = demo::allocator_of_t<C>;
             template <typename... A>
             promise_type(A const&... a)
                 : allocator(demo::find_allocator<allocator_type>(a...))
@@ -120,10 +107,10 @@ namespace demo
             lazy get_return_object() { return { std::coroutine_handle<promise_type>::from_promise(*this)}; }
             template <ex::sender Sender>
             auto await_transform(Sender&& sender) noexcept {
-                if constexpr (C::scheduler_affine)
-                    return ex::as_awaitable(ex::continues_on(sender, *(this->scheduler)), *this);
-                else
+                if constexpr (std::same_as<demo::inline_scheduler, scheduler_type>)
                     return ex::as_awaitable(sender, *this);
+                else
+                    return ex::as_awaitable(ex::continues_on(sender, *(this->scheduler)), *this);
             }
             template <demo::awaiter Awaiter>
             auto await_transform(Awaiter&&) noexcept  = delete;
@@ -134,14 +121,14 @@ namespace demo
             }
 
             [[no_unique_address]] allocator_type allocator;
-            std::optional<demo::any_scheduler>   scheduler{};
+            std::optional<scheduler_type>        scheduler{};
             state_base*                          state{};
             
             std::coroutine_handle<> unhandled_stopped() { return {}; }
 
             struct env {
                 promise_type const* promise;
-                demo::any_scheduler query(ex::get_scheduler_t) const noexcept { return *promise->scheduler; }
+                scheduler_type query(ex::get_scheduler_t) const noexcept { return *promise->scheduler; }
                 allocator_type query(ex::get_allocator_t) const noexcept { return promise->allocator; }
             };
 
@@ -162,7 +149,10 @@ namespace demo
             std::remove_cvref_t<Receiver>       receiver;
             std::coroutine_handle<promise_type> handle;
             void start() & noexcept {
-                handle.promise().scheduler.emplace(ex::get_scheduler(ex::get_env(this->receiver)));
+                if constexpr (requires{ scheduler_type(ex::get_scheduler(ex::get_env(this->receiver))); })
+                    handle.promise().scheduler.emplace(ex::get_scheduler(ex::get_env(this->receiver)));
+                else
+                    handle.promise().scheduler.emplace(scheduler_type());
                 handle.promise().state = this;
                 handle.resume();
             }
@@ -190,7 +180,7 @@ namespace demo
 
         std::coroutine_handle<promise_type> handle;
         lazy(std::coroutine_handle<promise_type> h): handle(std::move(h)) {}
-        lazy(lazy const& other) = default;
+        lazy(lazy const& other): handle(other.handle) { std::cout << "**** lazy was copied!\n" << std::flush; }
         lazy(lazy&& other): handle(std::exchange(other.handle, {})) {}
         ~lazy() {
             if (this->handle) {

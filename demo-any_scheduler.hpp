@@ -167,6 +167,20 @@ namespace demo {
         bool operator== (any_scheduler const&) const = default;
     };
     static_assert(ex::scheduler<any_scheduler>);
+
+
+    template <typename>
+    struct scheduler_of {
+        using type = demo::any_scheduler;
+    };
+    template <typename Context>
+        requires requires{ typename Context::scheduler_type; }
+    struct scheduler_of<Context> {
+        using type = typename Context::scheduler_type;
+    };
+    template <typename Context>
+    using scheduler_of_t = typename scheduler_of<Context>::type;
+
 }
 
 // ----------------------------------------------------------------------------
