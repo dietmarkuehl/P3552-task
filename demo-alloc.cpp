@@ -1,4 +1,5 @@
 #include <iostream>
+#include <cassert>
 #include <cstdlib>
 #include <beman/execution26/execution.hpp>
 #include "demo-lazy.hpp"
@@ -45,20 +46,31 @@ class fixed_resource
     }
 };
 
+struct alloc_aware: demo::default_context {
+    using allocator_type = std::pmr::polymorphic_allocator<std::byte>;
+};
+
 int main()
 {
     std::cout << "running just\n";
     ex::sync_wait(ex::just(0));
     std::cout << "just done\n\n";
 
-    std::cout << "running demo::lazy<void>\n";
-    ex::sync_wait([]()->demo::lazy<void> {
+    std::cout << "running demo::lazy<void, alloc_aware>\n";
+    ex::sync_wait([]()->demo::lazy<void, alloc_aware> {
         co_await ex::just(0);
         co_await ex::just(0);
     }());
-    std::cout << "demo::lazy<void> done\n\n";
+    std::cout << "demo::lazy<void, alloc_aware> done\n\n";
 
     fixed_resource<2048> resource;
+    std::cout << "running demo::lazy<void, alloc_aware> with alloc\n";
+    ex::sync_wait([](auto&&...)-> demo::lazy<void, alloc_aware> {
+        co_await ex::just(0);
+        co_await ex::just(0);
+    }(std::allocator_arg, &resource));
+    std::cout << "demo::lazy<void, alloc_aware> with alloc done\n\n";
+
     std::cout << "running demo::lazy<void> with alloc\n";
     ex::sync_wait([](auto&&...)-> demo::lazy<void> {
         co_await ex::just(0);
@@ -66,13 +78,11 @@ int main()
     }(std::allocator_arg, &resource));
     std::cout << "demo::lazy<void> with alloc done\n\n";
 
-    std::cout << "running demo::lazy<void, no_alloc_context> with alloc\n";
-    struct no_alloc_context: demo::default_context {
-        using allocator_type = void;
-    };
-    ex::sync_wait([](auto&&...)-> demo::lazy<void, no_alloc_context> {
-        co_await ex::just(0);
-        co_await ex::just(0);
+    std::cout << "running demo::lazy<void, alloc_aware> extracting alloc\n";
+    ex::sync_wait([](auto&&, auto* resource)-> demo::lazy<void, alloc_aware> {
+        auto alloc = co_await ex::read_env(ex::get_allocator);
+        static_assert(std::same_as<std::pmr::polymorphic_allocator<std::byte>, decltype(alloc)>);
+        assert(alloc == std::pmr::polymorphic_allocator<std::byte>(resource));
     }(std::allocator_arg, &resource));
-    std::cout << "demo::lazy<void, no_alloc_context> with alloc done\n\n";
+    std::cout << "demo::lazy<void, alloc_aware> extracting alloc done\n\n";
 }

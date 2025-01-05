@@ -15,7 +15,7 @@ namespace demo
 {
     template <typename>
     struct allocator_of {
-        using type = std::pmr::polymorphic_allocator<std::byte>;
+        using type = std::allocator<std::byte>;
     };
     template <typename Context>
         requires requires{ typename Context::allocator_type; }
@@ -30,13 +30,13 @@ namespace demo
         return Allocator();
     }
     template <typename Allocator, typename Alloc, typename... A>
-    Allocator find_allocator(std::allocator_arg_t, Alloc const& alloc, A const&...) {
+        requires requires(Alloc const& alloc) { Allocator(alloc); }
+    Allocator find_allocator(std::allocator_arg_t const&, Alloc const& alloc, A const&...) {
         return Allocator(alloc);
     }
     template <typename Allocator, typename A0, typename... A>
-        requires (not std::same_as<std::allocator_arg_t, A0>)
     Allocator find_allocator(A0 const&, A const&...a) {
-        return demo::find_allocator<Allocator>(std::forward<A>(a)...);
+        return demo::find_allocator<Allocator>(a...);
     }
 
     template <typename C, typename... A>

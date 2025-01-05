@@ -89,11 +89,18 @@ namespace demo
             : promise_base<std::remove_cvref_t<T>>
         {
             template <typename... A>
-            void* operator new(std::size_t size, A&&... a) {
+            void* operator new(std::size_t size, A const&... a) {
                 return demo::coroutine_allocate<C>(size, a...);
             }
             void operator delete(void* ptr, std::size_t size) {
                 return demo::coroutine_deallocate<C>(ptr, size);
+            }
+
+            using allocator_type = demo::allocator_of_t<C>;
+            template <typename... A>
+            promise_type(A const&... a)
+                : allocator(demo::find_allocator<allocator_type>(a...))
+            {
             }
 
             struct final_awaiter {
@@ -126,14 +133,16 @@ namespace demo
                 return {this};
             }
 
-            std::optional<demo::any_scheduler> scheduler{};
-            state_base* state{};
+            [[no_unique_address]] allocator_type allocator;
+            std::optional<demo::any_scheduler>   scheduler{};
+            state_base*                          state{};
             
             std::coroutine_handle<> unhandled_stopped() { return {}; }
 
             struct env {
                 promise_type const* promise;
                 demo::any_scheduler query(ex::get_scheduler_t) const noexcept { return *promise->scheduler; }
+                allocator_type query(ex::get_allocator_t) const noexcept { return promise->allocator; }
             };
 
             env get_env() const noexcept { return {this}; }
