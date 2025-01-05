@@ -4,12 +4,14 @@
 #ifndef INCLUDED_DEMO_LAZY
 #define INCLUDED_DEMO_LAZY
 
+#include <beman/execution26/execution.hpp>
+#include "demo-allocator.hpp"
+#include "demo-any_scheduler.hpp"
 #include <concepts>
 #include <coroutine>
-#include <optional>
 #include <iostream>
-#include <beman/execution26/execution.hpp>
-#include "demo-any_scheduler.hpp"
+#include <optional>
+#include <type_traits>
 
 // ----------------------------------------------------------------------------
 
@@ -35,6 +37,21 @@ namespace demo
 
     template <typename T = void, typename C = default_context>
     struct lazy {
+        struct dealloc_base {
+            dealloc_base() = default;
+            virtual ~dealloc_base() = default;
+            virtual dealloc_base* clone(void*) = 0;
+            virtual void deallocate(void*, std::size_t) = 0;
+        };
+        template <typename Alloc>
+        struct dealloc: dealloc_base {
+            Alloc alloc;
+            dealloc_base* clone(void*) override { return new dealloc(*this); }
+            void deallocate(void* ptr, std::size_t size) override {
+                std::allocator_traits<Alloc>::deallocate(this->alloc, ptr, size);
+            }
+        };
+
         template <typename R>
         struct completion { using type = ex::set_value_t(R); };
         template <>
@@ -71,6 +88,14 @@ namespace demo
         struct promise_type
             : promise_base<std::remove_cvref_t<T>>
         {
+            template <typename... A>
+            void* operator new(std::size_t size, A&&... a) {
+                return demo::coroutine_allocate<C>(size, a...);
+            }
+            void operator delete(void* ptr, std::size_t size) {
+                return demo::coroutine_deallocate<C>(ptr, size);
+            }
+
             struct final_awaiter {
                 promise_type* promise;
                 static constexpr bool await_ready() noexcept { return false; }
@@ -79,6 +104,7 @@ namespace demo
                 }
                 static void await_resume() noexcept {}
             };
+
             std::suspend_always initial_suspend() noexcept { return {}; }
             final_awaiter final_suspend() noexcept { return {this}; }
             void unhandled_exception() {
@@ -154,6 +180,14 @@ namespace demo
         };
 
         std::coroutine_handle<promise_type> handle;
+        lazy(std::coroutine_handle<promise_type> h): handle(std::move(h)) {}
+        lazy(lazy const& other) = default;
+        lazy(lazy&& other): handle(std::exchange(other.handle, {})) {}
+        ~lazy() {
+            if (this->handle) {
+                this->handle.destroy();
+            }
+        }
         template <typename Receiver>
         state<Receiver> connect(Receiver receiver)
         {
