@@ -5,12 +5,11 @@
 #define INCLUDED_DEMO_LAZY
 
 #include <beman/execution26/execution.hpp>
+#include "demo-allocator.hpp"
 #include "demo-any_scheduler.hpp"
 #include <concepts>
 #include <coroutine>
 #include <iostream>
-#include <memory>
-#include <new>
 #include <optional>
 #include <type_traits>
 
@@ -19,20 +18,6 @@
 namespace demo
 {
     namespace ex = beman::execution26;
-
-    template <typename Allocator>
-    Allocator find_alloc() {
-        return Allocator();
-    }
-    template <typename Allocator, typename Alloc, typename... A>
-    Allocator find_alloc(std::allocator_arg_t, Alloc const& alloc, A const&...) {
-        return Allocator(alloc);
-    }
-    template <typename Allocator, typename A0, typename... A>
-        requires (not std::same_as<std::allocator_arg_t, A0>)
-    Allocator find_alloc(A0 const&, A const&...a) {
-        return demo::find_alloc<Allocator>(std::forward<A>(a)...);
-    }
 
     template <typename Awaiter>
     concept awaiter = ex::sender<Awaiter>
@@ -47,7 +32,6 @@ namespace demo
 
     struct default_context
     {
-        using allocator_type = std::pmr::polymorphic_allocator<std::byte>;
         static bool constexpr scheduler_affine{true};
     };
 
@@ -106,31 +90,10 @@ namespace demo
         {
             template <typename... A>
             void* operator new(std::size_t size, A&&... a) {
-                using allocator_type = typename C::allocator_type;
-                if constexpr (std::same_as<void, allocator_type>) {
-                    return ::operator new(size);
-                }
-                else {
-                    using traits = std::allocator_traits<allocator_type>;
-                    allocator_type alloc{demo::find_alloc<allocator_type>(a...)};
-                    std::byte* ptr{traits::allocate(alloc, size + sizeof(allocator_type))};
-                    new(ptr + size) allocator_type(alloc);
-                    return ptr;
-                }
+                return demo::coroutine_allocate<C>(size, a...);
             }
             void operator delete(void* ptr, std::size_t size) {
-                using allocator_type = typename C::allocator_type;
-                if constexpr (std::same_as<void, allocator_type>) {
-                    return ::operator delete(ptr, size);
-                }
-                else {
-                    using traits = std::allocator_traits<allocator_type>;
-                    void* vptr{static_cast<std::byte*>(ptr) + size};
-                    auto* aptr{static_cast<allocator_type*>(vptr)};
-                    allocator_type alloc(*aptr);
-                    aptr->~allocator_type();
-                    traits::deallocate(alloc, static_cast<std::byte*>(ptr), size);
-                }
+                return demo::coroutine_deallocate<C>(ptr, size);
             }
 
             struct final_awaiter {
