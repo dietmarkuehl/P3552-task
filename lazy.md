@@ -407,17 +407,18 @@ customization are at least:
     the environment.
  - Disable [scheduler affinity](#scheduler-affinity) and/or configure
     the strategy for obtaining the coroutine's scheduler.
- - Disable [allocator awareness](#allocator-support).
+ - Configure [allocator awareness](#allocator-support).
  - Indicate that the coroutine should be [noexcept](#avoiding-set_error_texception_ptr).
+ - Define [additional error types](#support-for-reporting-an-error-without-exception).
 
-The default context should be explicitly named, e.g.,
-`lazy_default_context`, to allow easy customization while avoiding
-issues if future customizations are added. For example, allocator
-suport could be disabled using something like this:
+The default context should be used such that any empty type provides
+the default behavior instead of requiring a lot of boilerplate just
+to configure an particular aspect. For example, it should be possible
+to selectively disable [allocator support](#allocator-support) using
+something like this:
 
-    struct disable_allocator_context
-        : ex::lazy_defaultcontext {
-        static constexpr bool allocator_support{false};
+    struct disable_allocator_context: {
+        using allocator_type = void;
     };
     template <typename T>
     using my_lazy = ex::lazy<T, disable_allocator_context>;
@@ -532,26 +533,63 @@ can be explicitly specified:
 
 ## Allocator Support
 
-**TODO** turn into text
+When using coroutines at least the coroutine frame may end up being
+allocated on the heap: the [HALO](https://wg21.link/P0981) optimizations
+aren't always possible, e.g., when a coroutine becomes a child of
+another sender. To control how this allocation is done and to support
+environments where allocations aren't possible `lazy` should have
+allocator support. The idea is to pick up on a pair of arguments of
+type `std::allocator_arg_t` and an allocator type being passed and use
+the corresponding allocator if present. For example:
 
-- At least the coroutine frame is likely allocated on the heap
-- Coroutines support passing the coroutine arguments to a
-    `promise_type::operator new` and the `promise_type` constructor:
-    using `allocator_arg_t` the leading arguments can be used to pass
-    an allocator: `[](allocator_arg, alloc, args...) -> lazy<T>`
-- The `promise_type::operator delete` only gets the pointer and
-    optionally the size => if allocators are supported it always
-    necessary to somehow store an allocator
-- It may be reasonable to indicate allocator awareness via the context
-    with the default being allocator aware
-- The allocator, when provided, should be used for any allocation used
-    by the coroutine implementation (if any)
-- The allocator it should be used the `get_allocator(env)` for the
-    coroutine and child receiver's environment. As the coroutine
-    parameters do not affect the coroutine type, the allocator would
-    be a `std::pmr::polymorphic_allocator<>`, if necessary with a
-    memory resource forwarding allocation requests to the passed
-    allocator.
+    struct allocator_aware_context {
+        using allocator_type = std::pmr::polymorphic_allocator<std::byte>;
+    };
+
+    template <typename...A>
+    ex::lazy<int, allocator_aware_context> fun(int value, A&&...) {
+        co_return value;
+    }
+    
+    int main() {
+        // Use the coroutine without passing an allocator:
+        ex::sync_wait(fun(17));
+
+        // Use the coroutine with passing an allocator:
+        using allocator_type = std::pmr::polymorphic_alloctor<std::byte>;
+        ex::sync_wait(fun(17, std::allocator_arg, allocator_type()));
+    }
+
+The arguments passed when creating the coroutine are made available
+to an `operator new` of the promise type, i.e., this operator can
+extract the allocator, if any, from the list of parameters and use
+that for the purpose of allocation. The matching `operator delete`
+gets passed only the pointer to release and the originally requested
+`size`. To have access to the correct allocator in `operator delete`
+it either needs to be stateless or a copy needs to be accessible
+via the pointer passed to `operator delete`, e.g., stored at the
+offset `size`.
+
+To avoid any cost introduced by type erasing an allocator
+type as part of the `lazy` definition the expected allocator type
+is obtained from the context argument `C` of `lazy<T, C>`:
+
+    using allocator_type = ex::allocator_of_t<C>;
+
+This `using` alias uses `typename C::allocator_type` if present or
+defaults to `std::::allocator<std::byte>` otherwise.  This
+`allocator_type` has to be for the type `std::byte` (if necessary
+it is possible to relax that constraint).
+
+The allocator used for the coroutine frame should also be used for
+any other allocators needed for the coroutine itself, e.g., when
+type erasing something needed for its operation (although in most
+cases a small object optimization would be preferable and sufficient).
+Also, the allocator should be made available to child operations
+via the respective receiver's environment using the `get_allocator`
+query. The arguments passed to the coroutine are also available to
+the constructor of the promise type (if there is a matching on) and
+the allocator can be obtained from there.
 
 ## Environment Support
 
