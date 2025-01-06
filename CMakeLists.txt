@@ -20,10 +20,12 @@ list(
   beman-loop
   beman-return
   beman-stopped
+  demo-query
   demo-affinity
   demo-alloc
   demo-friendly
   demo-result_example
+  demo-stop
 )
 
 list(

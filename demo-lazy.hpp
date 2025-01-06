@@ -69,6 +69,8 @@ namespace demo
 
         struct state_base {
             virtual void complete(promise_base<std::remove_cvref_t<T>>::result_t&) = 0;
+            virtual ex::inplace_stop_token get_stop_token() = 0;
+            virtual C& get_context() = 0;
         protected:
             virtual ~state_base() = default;
         };
@@ -128,26 +130,56 @@ namespace demo
 
             struct env {
                 promise_type const* promise;
+
                 scheduler_type query(ex::get_scheduler_t) const noexcept { return *promise->scheduler; }
                 allocator_type query(ex::get_allocator_t) const noexcept { return promise->allocator; }
+                ex::inplace_stop_token query(ex::get_stop_token_t) const noexcept { return promise->state->get_stop_token(); }
+                template <typename Q, typename... A>
+                    requires requires(C const& c, Q q, A&&...a){ q(c, std::forward<A>(a)...); }
+                auto query(Q q, A&&... a) const noexcept { return q(promise->state->get_context(), std::forward<A>(a)...); }
             };
 
             env get_env() const noexcept { return {this}; }
         };
 
         template <typename Receiver>
+        struct state_rep {
+            std::remove_cvref_t<Receiver> receiver;
+            C                             context;
+            template <typename R>
+            state_rep(R&& r): receiver(std::forward<R>(r)), context() {}
+        };
+        template <typename Receiver>
+            requires requires{ C(ex::get_env(std::declval<std::remove_cvref_t<Receiver>&>())); }
+        struct state_rep<Receiver> {
+            std::remove_cvref_t<Receiver> receiver;
+            C                             context;
+            template <typename R>
+            state_rep(R&& r): receiver(std::forward<R>(r)), context(ex::get_env(this->receiver)) {}
+        };
+
+        template <typename Receiver>
         struct state
             : state_base
+            , state_rep<Receiver>
         {
             using operation_state_concept = ex::operation_state_t;
+            using stop_token_t = decltype(ex::get_stop_token(ex::get_env(std::declval<Receiver>())));
+            struct stop_link {
+                ex::inplace_stop_source& source;
+                void operator()() const noexcept { source.request_stop(); }
+            };
+            using stop_callback_t = ex::stop_callback_for_t<stop_token_t, stop_link>;
             template <typename R, typename H>
             state(R&& r, H h)
-                : receiver(std::forward<R>(r))
+                : state_rep<Receiver>(std::forward<R>(r))
                 , handle(std::move(h))
             {
             }
-            std::remove_cvref_t<Receiver>       receiver;
             std::coroutine_handle<promise_type> handle;
+            ex::inplace_stop_source             source;
+            std::optional<stop_callback_t>      stop_callback;
+
             void start() & noexcept {
                 if constexpr (requires{ scheduler_type(ex::get_scheduler(ex::get_env(this->receiver))); })
                     handle.promise().scheduler.emplace(ex::get_scheduler(ex::get_env(this->receiver)));
@@ -176,6 +208,13 @@ namespace demo
                     break;
                 }
             }
+            ex::inplace_stop_token get_stop_token() override {
+                if (!this->stop_callback) {
+                    this->stop_callback.emplace(ex::get_stop_token(ex::get_env(this->receiver)), stop_link(this->source));
+                }
+                return this->source.get_token();
+            }
+            C& get_context() override { return this->context; }
         };
 
         std::coroutine_handle<promise_type> handle;
