@@ -20,6 +20,22 @@ is that users would use the framework using some coroutine type. To
 support that a suitable class needs to be defined and this proposal
 is providing such a definition.
 
+Just to get an idea what this proposal is about: here is a simple
+`Hello, world` written using a coroutine test:
+
+    #include <beman/execution26/execution.hpp>
+    #include "demo-lazy.hpp" //-dk:TODO should be <beman/task26/task.hpp>
+    #include <iostream>
+
+    namespace ex = beman::execution26;
+
+    int main() {
+        return std::get<0>(*ex::sync_wait([]->demo::lazy<int> {
+            std::cout << "Hello, world!\n";
+            co_return co_await ex::just(0);
+        }()));
+    }
+
 # The Name
 
 Just to get it out of the way: the class (template) used to implement
@@ -144,18 +160,18 @@ the need for an operation akin to `when_ready()`.
 
 ## [libunifex](https://github.com/facebookexperimental/libunifex)
 
-`libunifex` is an earlier implementation of the sender/receiver
+`unifex` is an earlier implementation of the sender/receiver
 ideas. Compared to `std::execution` it is lacking some of the
 flexibilities. For example, it doesn't have a concept of environments
 or domains. However, the fundamental idea of three completion
 channels for success, failure, and cancellation and the general
 shape of how these are used is present (even using the same names
 for `set_value` and `set_error`; the equivalent of `set_stopped`
-is called `set_done`). `libunifex` is in production use in multiple
+is called `set_done`). `unifex` is in production use in multiple
 places. The implementation includes a
 [`unifex::task<T>`](https://github.com/facebookexperimental/libunifex/blob/main/include/unifex/task.hpp).
 
-As `libunifex` is sender/receiver-based, its `unifex::task<T>` is
+As `unifex` is sender/receiver-based, its `unifex::task<T>` is
 implemented such that `co_await` can deal with senders in addition
 to awaitables or awaiters. Also, `unifex::task<T>` is _scheduler
 affine_: the coroutine code resumes on the same scheduler even if a
@@ -208,7 +224,7 @@ to a `unifex::task<T>`. In particular, when using a
 with a `unifex::task<T> t` as the `async_scope` doesn't provide a
 scheduler.
 
-`libunifex` provides some sender algorithms to transform the sender
+`unifex` provides some sender algorithms to transform the sender
 result into something which may be more suitable to be `co_await`ed.
 For example, `unifex::done_as_optional(sender)` turns a successful
 completion for a type `T` into an `std::optional<T>` and the
@@ -500,36 +516,132 @@ can be explicitly specified:
 
 ## Scheduler Affinity
 
-**TODO** turn into text
+Coroutines look very similar to synchronous code with a few
+`co`-keywords sprinkled over the code. When reading such code the
+expectation is typically that all code executes on the same context
+despite some `co_await` using sender which may explicitly change
+the scheduler. Users may run a query and do some lengthy computation
+with the result of the query and would be surprised if that blocked
+other queries from being made. Thus, the execution should normally
+be transferred back to the original scheduler: this transfer of the
+execution with a coroutine is referred to as _scheduler affinity_.
+Note: a scheduler may execute on multiple threads, e.g., for a pool
+scheduler: execution would get to any of these threads, i.e., thread
+local storage is _not_ guaranteed to access the same data even with
+scheduler affinity.
 
-**TODO** confirm whether it is possible have an inline scheduler which can
-    immediately start the operation (or if corresponding detection can go
-    into `continues_on`)
+The basic idea for scheduler affinity consists of a few parts:
 
-- Resume the coroutine on the same scheduler even if the sender completes
-    on a different scheduler: `await_transform(sender)` returns
-    `continues_on(as_awaitable(sender), scheduler)`.
-- The used `scheduler` is determined using `get_scheduler(env)` where
-    `env` is the environment of the task's receiver => the `scheduler`
-    needs to be type-erased in some form
-- What should happen if there is no `get_scheduler(env)`? Require a
-    scheduler (unifex), use an inline scheduler (stdexec), or something
-    else? Using an inline scheduler effectively means there is no
-    scheduler affinity which probably leads to many issues (which is
-    backed up by usage reports)
-- Provide the definition of an inline scheduler to inhibit scheduler
-    affinity, i.e., avoiding the cost of scheduling.
-- Allow avoiding scheduling, probably using a suitable tag for the
-    sender for cases where the sender is known not be scheduled on a
-    different scheduler, e.g., `just(args...)` or `then(...)`, or
-    when explicitly scheduling on a different scheduler
-    `co_await schedule(s)` as is supported by unifex.
-- When avoiding scheduling, probably the result of `as_awaitable(sender)`
-    should be returned directly instead of going through `continues_on`
-    with an inline scheduler.
-- Scheduler affinity may potentially be controlled via the context with
-    the default being scheduler affine.
-- Note: scheduling on a non-inline scheduler helps with stack overflow.
+1. A scheduler is determined when `start`ing an operation state
+    which resulted from `connect`ing a coroutine to a receiver.
+    This scheduler is used to resume execution of the coroutine.
+    The scheduler is determined based on the receiver `r`'s
+    environment.
+
+        auto scheduler = get_scheduler(get_env(r));
+
+2. The type of `scheduler` is unknown when the coroutine is created.
+    Thus, the coroutine implementation needs to operate in terms
+    of a scheduler with a known type which can be constructed from
+    `scheduler`. The used scheduler type is determined based on the
+    context parameter `C` of the coroutine type `lazy<T, C>` using
+    `typename C::scheduler_type` and defaults to `any_scheduler`
+    if this type isn't defined. `any_scheduler` uses type-erasure
+    to deal with arbitrary schedulers (and small object optimisations
+    to avoid allocations). The used scheduler type can be parameterized
+    to allow use of `lazy` contexts where the scheduler type is
+    known.
+
+3. When an operation which is `co_await`ed completes the execution
+     is transferred to the held scheduler using `continues_on`.
+     Injecting this operation into the graph can be done in the
+     promise type's `await_transform`:
+
+        template <ex::sender Sender>
+        auto await_transform(Sender&& sender) noexcept {
+            return ex::as_awaitable_sender(
+                ex::continues_on(std::forward<Sender>(sender),
+                                 this->scheduler);
+            );
+        }
+
+There are a few immediate issues with the basic idea:
+
+1. What should happen if there is no scheduler, i.e.,
+    `get_scheduler(get_env(r))` doesn't exist?
+2. What should happen if the obtained `scheduler` is incompatible with
+    the coroutine's scheduler?
+3. Scheduling isn't free and despite the potential problems it should
+    be possible to use `lazy` without scheduler affinity.
+4. When operations are known to complete inline the scheduler isn't
+    actually changed and the scheduling operation should be avoided.
+5. It should be possible to explicitly change the context from
+    within a coroutine.
+    
+All of these issues can be addressed although there are different
+choices in some of these cases. 
+
+In many cases the receiver can provide access to a scheduler via
+the environment query. An example where no scheduler is available
+is when starting a task on a [`counting_scope`](https://wg21.link/p3149).
+The scope doesn't know about any receivers and, thus, receiver
+doesn't support the `get_scheduler` query:
+
+    ex::spawn([]->ex::lazy<void> { co_await ex::just(); }(), token);
+
+Using `spawn()` with work is expected to be quite common, i.e., it
+isn't just a theoretical possibility.  The approach used by
+[`unifex`](https://github.com/facebookexperimental/libunifex) is
+to fail compilation when trying to `connect` a `Task` with a receiver
+without a scheduler. The approach taken by
+[`stdexec`](https://github.com/NVIDIA/stdexec) is to keep executing
+inline in that case. Based on the experience that silently changing
+contexts within a coroutine frequently causes bugs it seems failing
+to compile is preferrable.
+
+Failing to construct the scheduler used by a coroutine with the
+`scheduler` obtained from the receiver is likely an error and should
+be addressed by the user appropriately. Failing to compile is seems
+to be a reasonable approach in that case, too.
+
+It should be possible to avoid scheduler affinity explicitly to
+avoid the cost of scheduling. Users should be very careful when
+pursuing this direction but it can be a valid option. One way to
+achieve that is to create an "inline scheduler" which immediately
+completes when it is `start()`ed and using this type for the
+coroutine. Explicitly providing a type `inline_scheduler` implementing
+this logic could allow creating suitable warnings. It would also
+allow detecting that type in `await_transform` and avoiding the use
+of `continues_on` entirely.
+
+When operations actually don't change the scheduler there shouldn't
+be a need to schedule them again. In these cases it would be great
+if the `continues_on` could be avoided. At the moment there is no
+way to tell whether a sender will complete inline. Using a sender
+query which determines whether sender always completes inline could
+avoid the rescheduling. Something like that is implemented for
+[`unifex`](https://github.com/facebookexperimental/libunifex):
+senders define a property `blocking` which can have the value
+`blocking_kind::always_inline`. For a standard version it seems a
+sender query `get_blocking(sender, env)` providing an indication
+on whether and how the sender copmletes could be reasonable but is
+probably a different paper.
+
+In some situations it is desirable to explicitly switch to a different
+scheduler from within the coroutine and from then on carry on using
+this scheduler.
+[`unifex`](https://github.com/facebookexperimental/libunifex) detects
+the use of `co_await scheduler(sender);` for this purpose. That is,
+however, somewhat subtle. It may be reasonable to use a dedicated
+awaiter for this purpose and use, e.g.
+
+    co_await co_continue_on(scheduler);
+
+One advantage of scheduling the operations is that it helps with
+stack overflows: when scheduling on a non-inline scheduler the
+call stack is unwound. Without that it may be necessary to inject
+scheduling just for the purpose of avoiding stack overflow when
+too many operations complete inline.
 
 ## Allocator Support
 
@@ -589,7 +701,17 @@ Also, the allocator should be made available to child operations
 via the respective receiver's environment using the `get_allocator`
 query. The arguments passed to the coroutine are also available to
 the constructor of the promise type (if there is a matching on) and
-the allocator can be obtained from there.
+the allocator can be obtained from there:
+
+    struct alloc_aware {
+        using allocator_type = pmr::polymorphic_allocator<std::byte>;
+    };
+    fixed_resource<2048> resource;
+
+    ex::sync_wait([](auto&&, auto* resource)-> ex::lazy<void, alloc_aware> {
+        auto alloc = co_await ex::read_env(ex::get_allocator);
+        use(alloc);
+    }(allocator_arg, &resource));
 
 ## Environment Support
 
@@ -693,9 +815,9 @@ the allocator can be obtained from there.
 # Caveats
 
 The use of coroutines introduces some issues which are entirely
-independent of how coroutines are defined. Some these were brought
-up on prior discussions but they aren't anything which can be
-solved as part of any particular coroutine implementation. In
+independent of how specific coroutines are defined. Some these were
+brought up on prior discussions but they aren't anything which can
+be solved as part of any particular coroutine implementation. In
 particular:
 
 1. As `co_await`ing the result of an operation (or `co_yield`ing a
@@ -712,9 +834,22 @@ particular:
     there is no way to guard against users explicitly destroying a
     coroutine from within its implementation or from another thread:
     that's akin to destroying an object while it being used.
+3. Debugging asynchronous code doesn't work with the normal approaches:
+    there is generally not suitable stack as work gets resumed from
+    some run loop which doesn't tell what set up the original work.
+    To improve on this situation, _async stack traces_ linking
+    different pieces of outstanding work together can help. At
+    [CppCon 2024](https://cppcon.org/cppcon-2024-timeline/) Ian
+    Petersen and Jessica Wong presented how that may work ([watch
+    the video](https://youtu.be/nHy2cA9ZDbw?si=RDFty43InNoJxJNN)).
+    Implementations should consider adding corresponding support
+    and enhance tooling, e.g., debuggers, to pick up on async stack
+    traces.
 
-Discussion of these issues should be delegated to suitable proposals
-wanting to improve this situation in some form.
+While these issues are important this proposal isn't the right place
+to discuss them. Discussion of these issues should be delegated
+to suitable proposals wanting to improve this situation in some
+form.
 
 # Open Questions
 
@@ -729,6 +864,31 @@ above.
 - Scheduler affinity: add a definition for `inline_scheduler`
   (using whatever name) to support disabling scheduler affinity?
 - **TODO** at the various other outstanding questions
+
+# Implementation
+
+**TODO** the implementation should be transferred to a Beman project
+and equipped with the relevant build, test, examples, and [ideally]
+documentation.
+
+An implementation of `lazy` as proposed in this document is available
+from [`beman::task26`](https://github.com/maikel/task). This
+implementation hasn't received much use, yet, as it is fairly new. It
+is setup to be buildable and provides some examples as a starting
+point for experimentation.
+
+Coroutine tasks very similar although not identical to the one
+proposed are used in multiple projects. In particular, there are
+three implementations in wide use:
+
+- [`Folly::Task`](https://github.com/facebook/folly/blob/main/folly/coro/Task.h)
+- [`unifex::Task`](https://github.com/facebookexperimental/libunifex/blob/main/include/unifex/task.hpp)
+- [`stdexec::task`](https://github.com/NVIDIA/stdexec/blob/main/include/exec/task.hpp)
+
+The first one
+([`Folly::Task`](https://github.com/facebook/folly/blob/main/folly/coro/Task.h))
+isn't based on sender/receiver. Usage experience from all three
+have influenced the design of `lazy`.
 
 # Proposed Wording
 
