@@ -1,8 +1,9 @@
 ---
 title: Add a Coroutine Lazy Type
 document: D3552R0
-date: 2024-12-29
+date: 2024-01-06
 audience:
+    - Concurrency Working Group (SG1)
     - Library Evolution Working Group (LEWG)
     - Library Working Group (LWG)
 author:
@@ -24,7 +25,7 @@ Just to get an idea what this proposal is about: here is a simple
 `Hello, world` written using a coroutine test:
 
     #include <beman/execution26/execution.hpp>
-    #include "demo-lazy.hpp" //-dk:TODO should be <beman/task26/task.hpp>
+    #include "demo-lazy.hpp" //-dk:TODO should be <beman/lazy26/lazy.hpp>
     #include <iostream>
 
     namespace ex = beman::execution26;
@@ -715,24 +716,58 @@ the allocator can be obtained from there:
 
 ## Environment Support
 
-**TODO** turn into text
+When `co_await`ing child operations these may want to access an
+environment. Ideally, the coroutine would expose the environment
+from the receiver it gets `connect`ed to. Doing so isn't directly
+possible because the coroutine doesn't know about environment type
+and the queries also don't know the type they are going to return.
 
-**TODO** look at forwarding specific queries based on traits and/or
-    functionality specified for a given query
+A basic environment can be provided by some entities already known
+to the coroutine, though:
 
-- At least, some environment members should be forwarded:
-    - a stop token based on the receiver's `get_stop_token(get_env(r))`
-        which can be done linking up an `inplace_stop_source`
-    - a scheduler based on `get_scheduler(get_env(r))` requiring a
-        type erased scheduler
-    - if the coroutine task is allocator aware
-        `get_allocator(get_env(child_receiver))` should provide
-        corresponding `pmr::polymorphic_allocator<>`
-- As the coroutine type is type erased, directly forwarding an
-    environmnent isn't an option: the environment queries only provide
-    a name but no concrete result type
-- The context can function as an environment together with the forwarded
-    items mentioned above
+- The `get_scheduler` query should provide the scheduler maintained
+    for [scheduler affinity](#scheduler-affinity) whose type is
+    determined based on the coroutine's context.
+- The `get_allocator` query should provide the
+    [coroutine's allocator](#allocator-support) whose type is
+    determined based on the coroutine's context and which gets
+    initialized when constructing the promise type.
+- The `get_stop_token` query should provide an `inplace_stop_token`
+    from a stop source which is linked to the stop token obtained
+    from the receiver's environment. Linking the stop source can be
+    delayed until the first stop token is requested.
+
+For any other environment query the context `C` of `lazy<T, C>` can
+be used: the coroutine can maintain an instance of type `C` which
+is constructed with a reference to the coroutine's receiver if a
+matching constructor exists or is default constructed otherwise.
+Constructing the context with the receiver's environment provides
+the opportunity to store whatever data is needed from the environment
+to later respond to queries as well. Any query which isn't provided
+by the coroutine but is available from the context is forward. Any
+other query shouldn't be part of the overload set.
+
+For example:
+
+    struct context {
+        int value{};
+        int query(get_value_t const&) const noexcept { return this->value; }
+        context(auto const& env): value(get_value(env)) {}
+    };
+
+    int main() {
+        ex::sync_wait(
+            ex::detail::write_env(
+                []->demo::lazy<void, context> {
+                    auto sched(co_await ex::read_env(get_scheduler));
+                    auto value(co_await ex::read_env(get_value));
+                    std::cout << "value=" << value << "\n";
+                    // ...
+                }(),
+                ex::detail::make_env(get_value, 42)
+            )
+        );
+    }
 
 ## Support For Requesting Cancellation/Stopped
 
