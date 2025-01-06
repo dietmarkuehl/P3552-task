@@ -59,4 +59,8 @@ int main() {
         std::cout << "cor2:" << fmt_id << "\n";
         }(pool)));
 #endif
+
+    ex::sync_wait([]->demo::lazy<int> {
+        co_return 0;
+    }());
 }

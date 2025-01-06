@@ -23,6 +23,7 @@ list(
   demo-affinity
   demo-alloc
   demo-friendly
+  demo-hello
   demo-result_example
 )
 

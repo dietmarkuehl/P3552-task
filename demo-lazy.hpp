@@ -149,10 +149,7 @@ namespace demo
             std::remove_cvref_t<Receiver>       receiver;
             std::coroutine_handle<promise_type> handle;
             void start() & noexcept {
-                if constexpr (requires{ scheduler_type(ex::get_scheduler(ex::get_env(this->receiver))); })
-                    handle.promise().scheduler.emplace(ex::get_scheduler(ex::get_env(this->receiver)));
-                else
-                    handle.promise().scheduler.emplace(scheduler_type());
+                handle.promise().scheduler.emplace(ex::get_scheduler(ex::get_env(this->receiver)));
                 handle.promise().state = this;
                 handle.resume();
             }
