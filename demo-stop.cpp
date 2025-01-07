@@ -20,20 +20,28 @@ int main() {
         source.request_stop();
     });
 
-    ex::sync_wait(
+    struct context {
+        struct xstop_source_type { // remove the x to disable the stop token
+            static constexpr bool stop_possible() { return false; }
+            static constexpr void request_stop() {}
+            static constexpr beman::execution26::never_stop_token get_token() { return {}; }
+        };
+    };
+
+    auto[result] = ex::sync_wait(
         ex::detail::write_env(
-            []->demo::lazy<std::uint64_t> {
-            ex::inplace_stop_token token(co_await ex::read_env(ex::get_stop_token));
+            []->demo::lazy<std::uint64_t, context> {
+            auto token(co_await ex::read_env(ex::get_stop_token));
             std::uint64_t count{};
-            while (!token.stop_requested()) {
+            while (!token.stop_requested() && count != 200'000'000u) {
                     ++count;
             }
-            std::cout << "count=" << count << "\n";
             co_return count;
         }(),
-            ex::detail::make_env(ex::get_stop_token, source.get_token())
+        ex::detail::make_env(ex::get_stop_token, source.get_token())
         )
-    );
+    ).value_or(std::uint64_t());
+    std::cout << "result=" << result << "\n";
     
     t.join();
 }

@@ -15,6 +15,8 @@ namespace ex = beman::execution26;
 
 namespace demo {
     struct any_scheduler {
+        // TODO: add support for forwarding stop_tokens to the type-erased sender
+        // TODO: other errors than std::exception_ptr should be supported
         struct state_base {
             virtual ~state_base() = default;
             virtual void complete_value() = 0;
