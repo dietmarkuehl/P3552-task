@@ -668,17 +668,25 @@ In some situations it is desirable to explicitly switch to a different
 scheduler from within the coroutine and from then on carry on using
 this scheduler.
 [`unifex`](https://github.com/facebookexperimental/libunifex) detects
-the use of `co_await scheduler(sender);` for this purpose. That is,
+the use of `co_await schedule(scheduler);` for this purpose. That is,
 however, somewhat subtle. It may be reasonable to use a dedicated
 awaiter for this purpose and use, e.g.
 
-    co_await co_continue_on(scheduler);
+    auto previous = co_await co_continue_on(new_scheduler);
 
-One advantage of scheduling the operations is that it helps with
-stack overflows: when scheduling on a non-inline scheduler the
-call stack is unwound. Without that it may be necessary to inject
-scheduling just for the purpose of avoiding stack overflow when
-too many operations complete inline.
+Using this statement replaces the coroutine's scheduler with the
+`new_scheduler`. Continuing after `co_await`ing operations gets
+scheduled on the `new_scheduler`. The result of `co_await`ing
+`co_continue_on` is the previously used scheduler to allow transfer
+back to this scheduler. In [stdexec](https://github.com/NVIDIA/stdexec)
+the corresponding operation is called `reschedule_coroutine`.
+
+Another advantage of scheduling the operations on a scheduler instead
+of immediately continuing on the context where the operation completed
+is that it helps with stack overflows: when scheduling on a non-inline
+scheduler the call stack is unwound. Without that it may be necessary
+to inject scheduling just for the purpose of avoiding stack overflow
+when too many operations complete inline.
 
 ## Allocator Support
 
@@ -768,20 +776,37 @@ to the coroutine, though:
     [coroutine's allocator](#allocator-support) whose type is
     determined based on the coroutine's context and which gets
     initialized when constructing the promise type.
-- The `get_stop_token` query should provide an `inplace_stop_token`
+- The `get_stop_token` query should provide an stop token
     from a stop source which is linked to the stop token obtained
-    from the receiver's environment. Linking the stop source can be
-    delayed until the first stop token is requested.
+    from the receiver's environment. The type of the stop source
+    can be configured using `C::stop_source_type` and defaults to
+    `ex::inplace_stop_source. Linking the stop source can be delayed
+    until the first stop token is requested or omitted entirely if
+    `stop_possible()` returns `false`.
 
 For any other environment query the context `C` of `lazy<T, C>` can
-be used: the coroutine can maintain an instance of type `C` which
-is constructed with a reference to the coroutine's receiver if a
-matching constructor exists or is default constructed otherwise.
-Constructing the context with the receiver's environment provides
-the opportunity to store whatever data is needed from the environment
-to later respond to queries as well. Any query which isn't provided
-by the coroutine but is available from the context is forward. Any
-other query shouldn't be part of the overload set.
+be used. The coroutine can maintain an instance of type `C`. In many
+cases queries from the environment of the coroutine's `receiver` need
+to be forwarded. Let `upstream_env` be `get_env(receiver)` and `UpstreamEnv`
+the type of `upstream_env`.  `C` gets optionally constructed
+with access to the environment:
+ 1. If `C::env_type<UpstreamEnv>` is a valid type the coroutine
+    state will contain an object `env` of this type which is
+    constructed with `upstream_env`. This object will live at least
+    as long as the `C` object maintained and `C` is constructed
+    with a reference to `env`, allowing `C` to reference type-erased
+    representations for query results it needs to forward.
+ 2. Otherwise, if `C(env)` is valid the `C` object is constructed
+    with the result of `get_env(receiver)`. Constructing the context
+    with the receiver's environment provides the opportunity to
+    store whatever data is needed from the environment to later
+    respond to queries as well.
+ 3. Otherwise, `C` is default constructed. This option typically
+    applies if `C` doesn't need to provide any environment queries.
+
+Any query which isn't provided by the coroutine but is available
+from the context `C` is forwarded. Any other query shouldn't be
+part of the overload set.
 
 For example:
 
@@ -890,6 +915,8 @@ is to allow `co_await ex::just_stopped()` directly.
     and inject a scheduler which doesn't never immediately continues
 - This does introduce a small overhead even in cases where there is
     no danger of stack overflows
+- Use symmetric transfer together with making some of the senders
+    awaiters
 
 ## Asynchronous Clean-Up
 
@@ -988,3 +1015,11 @@ have influenced the design of `lazy`.
 **TODO**: the intent is to have all relevant wording in place by the
 time the paper needs to be submitted on 2025-01-13 and remove/augment
 it according to the outcome of discussions in SG1 and/or LEWG.
+
+Entities to describe:
+- `inline_scheduler`
+- `any_scheduler`
+- `lazy`
+- <code><i>allocator_of_t<i></code> exposition-only?
+- <code><i>scheduler_of_t<i></code> exposition-only?
+- <code><i>stop_source_of_t<i></code> exposition-only?
