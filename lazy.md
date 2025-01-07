@@ -392,7 +392,7 @@ for whatever reason.
 
 ## Template Declaration for `lazy`
 
-Coroutines can have `co_return` a value. The value returned can
+Coroutines can use `co_return` to produce a value. The value returned can
 reasonably provide the argument for the `set_value_t` completion
 of the coroutines. As the type of a coroutine is defined even before
 the coroutine body is given, there is no way to deduce the result
@@ -426,7 +426,7 @@ customization are at least:
     the strategy for obtaining the coroutine's scheduler.
  - Configure [allocator awareness](#allocator-support).
  - Indicate that the coroutine should be [noexcept](#avoiding-set_error_texception_ptr).
- - Define [additional error types](#support-for-reporting-an-error-without-exception).
+ - Define [additional error types](#support-error-reporting-without-exception)
 
 The default context should be used such that any empty type provides
 the default behavior instead of requiring a lot of boilerplate just
@@ -449,15 +449,51 @@ they are used in a container, e.g., to process data using a range
 of coroutines, they are likely to use the same result type and
 context types for configurations.
 
+## `lazy` Completion Signatures
+
+The discussion above established that `lazy<T, C>` can have a
+successful completion using `set_value_t(T)`. The coroutine completes
+accordingly when it is exited using a matching `co_return`. When
+`T` is `void` the coroutine also completes successfully using
+`set_value()` when floating off the end of the coroutine or when
+using a `co_return` without an expression.
+
+If a coroutine exits with an exception completing the corresponding
+operation with `set_error(std::exception_ptr)` is an obvious choice.
+Note that a `co_await` expression results in throwing an exception
+when the awaited operation completes with `set_error(E)`
+([see below](#result-type-for-co_await)), i.e., the coroutine itself
+doesn't necessarily need to `throw` an exception itself.
+
+Finally, a `co_await` expression completing with `set_stoppped()`
+results in aborting the coroutine immediately
+([see below](#result-type-for-co_await)) and causing the coroutine
+itself to also complete with `set_stopped()`.
+
+The coroutine implementation cannot inspect the coroutine body to
+determine how the different asynchronous operations may complete. As
+a result, the default completion signatures for `lazy<T>` are
+
+    ex::completion_signatures<
+        ex::set_value_t(T),  // or ex::set_value_t() if T == void
+        ex::set_error_t(std::exception_ptr),
+        ex:set_stopped()
+    >;
+
+Support for
+[reporting an error without exception](#support-error-reporting-without-exception)
+and supporting a [declaration for not throwing](#avoiding-set_error_texception_ptr)
+may modify the completion signatures.
+
 ## `lazy` constructors and assignments
 
-**TODO**
+**TODO** ctor and assignments
 
 - use guidance from [P1056](https://wg21.link/p1056) and [P2506](https://wg21.link/p2506)
 
 ## Result Type For `co_await`
 
-**TODO** turn into text
+**TODO** turn into text: result type for co_await
 
 - status quo based on `execution::as_awaitable(sender)`:
     - Exactly one `set_value_t(T...)` completion
@@ -771,17 +807,29 @@ For example:
 
 ## Support For Requesting Cancellation/Stopped
 
-**TODO** turn into text
+When a coroutine task does the primary processing it may listen to
+a stop token to recognize that it got cancelled. Once it recognizes
+that its work should be stopped it should also complete with
+`set_stopped()`. Assuming work without any `set_value(T&&...)` completion
+can be awaited (see the discussion on the
+[`co_await` result type](#result-type-for-co_await)) this can be achieved
+with the help of `just_stopped()`:
 
-- If `co_await just_stopped()` works, i.e., it is possible to have no
-    `set_value_t(T...)` completion that would be a viable approach to
-    indicate cancellation from within the coroutine
-- Otherwise or in addition the technique for reporting errors from
-    within the coroutine can be used ([see below](#support-for-reporting-an-error-without-exception))
+    co_await ex::just_stopped();
 
-## Support For Reporting An Error Without Exception
+The sender `just_stopped()` completes with `set_stopped()` causing
+the coroutine to be cancelled. Any other sender completing with
+`set_stopped()` can also be used.
 
-**TODO** turn into text
+In case a `set_value(T&&...)` completion is required for `co_await`
+a custom algorithm could be provided which behaves like `just_stopped()`
+but also claims to complete with `set_value()` to satisfy a requirement
+to have at least one `set_value(T&&...)` completion. The recommendation
+is to allow `co_await ex::just_stopped()` directly.
+
+## Support Error Reporting Without Exception
+
+**TODO** turn into text: error reporting without exception
 
 - The coroutine body can operate on the coroutine using `co_await`,
     `co_return`, or `co_yield`
@@ -819,7 +867,7 @@ For example:
 
 ## Avoiding `set_error_t(exception_ptr)`
 
-**TODO** turn into text
+**TODO** turn into text avoiding set_error_t(exceptio_ptr)
 
 - It may be desirable to avoid the `set_error_t(exception_ptr)` completion
     especially in environments not supporting exceptions
@@ -832,7 +880,7 @@ For example:
 
 ## Avoiding Stack Overflow
 
-**TODO** turn into text
+**TODO** turn into text: avoiding stack overflow
 
 - When always using scheduler affinity with a scheduler which doesn't
     immediately return the potential for stack overflows is avoided
@@ -845,7 +893,17 @@ For example:
 
 ## Asynchronous Clean-Up
 
-**TODO** document an existing approach or come up with an approach
+Asynchronous clean-up of objects is an important facility. Both
+[`unifex`](https://github.com/facebookexperimental/libunifex) and
+[stdexec](https://github.com/NVIDIA/stdexec) provide some facilities
+for asynchronous clean-up in their respective coroutine task. Based
+on the experience the recommendation is to do something different!
+
+The recommended direction is to support asynchronous resources
+independent of a coroutine task. For example the
+[async-object](https://wg21.link/p2849) proposal is in this direction.
+There is similar work ongoing in the context of
+[Folly](https://github.com/facebook/folly).
 
 # Caveats
 
@@ -898,7 +956,7 @@ above.
   receiver's environments?
 - Scheduler affinity: add a definition for `inline_scheduler`
   (using whatever name) to support disabling scheduler affinity?
-- **TODO** at the various other outstanding questions
+- **TODO** add the various other outstanding questions
 
 # Implementation
 
