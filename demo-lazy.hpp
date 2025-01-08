@@ -7,6 +7,7 @@
 #include <beman/execution26/execution.hpp>
 #include "demo-allocator.hpp"
 #include "demo-any_scheduler.hpp"
+#include "demo-stop_source.hpp"
 #include "demo-inline_scheduler.hpp"
 #include <concepts>
 #include <coroutine>
@@ -37,8 +38,10 @@ namespace demo
 
     template <typename T = void, typename C = default_context>
     struct lazy {
-        using allocator_type = demo::allocator_of_t<C>;
-        using scheduler_type = demo::scheduler_of_t<C>;
+        using allocator_type   = demo::allocator_of_t<C>;
+        using scheduler_type   = demo::scheduler_of_t<C>;
+        using stop_source_type = demo::stop_source_of_t<C>;
+        using stop_token_type  = decltype(std::declval<stop_source_type>().get_token());
 
         template <typename R>
         struct completion { using type = ex::set_value_t(R); };
@@ -69,7 +72,7 @@ namespace demo
 
         struct state_base {
             virtual void complete(promise_base<std::remove_cvref_t<T>>::result_t&) = 0;
-            virtual ex::inplace_stop_token get_stop_token() = 0;
+            virtual stop_token_type get_stop_token() = 0;
             virtual C& get_context() = 0;
         protected:
             virtual ~state_base() = default;
@@ -131,9 +134,9 @@ namespace demo
             struct env {
                 promise_type const* promise;
 
-                scheduler_type query(ex::get_scheduler_t) const noexcept { return *promise->scheduler; }
-                allocator_type query(ex::get_allocator_t) const noexcept { return promise->allocator; }
-                ex::inplace_stop_token query(ex::get_stop_token_t) const noexcept { return promise->state->get_stop_token(); }
+                scheduler_type  query(ex::get_scheduler_t) const noexcept { return *promise->scheduler; }
+                allocator_type  query(ex::get_allocator_t) const noexcept { return promise->allocator; }
+                stop_token_type query(ex::get_stop_token_t) const noexcept { return promise->state->get_stop_token(); }
                 template <typename Q, typename... A>
                     requires requires(C const& c, Q q, A&&...a){ q(c, std::forward<A>(a)...); }
                 auto query(Q q, A&&... a) const noexcept { return q(promise->state->get_context(), std::forward<A>(a)...); }
@@ -151,11 +154,31 @@ namespace demo
         };
         template <typename Receiver>
             requires requires{ C(ex::get_env(std::declval<std::remove_cvref_t<Receiver>&>())); }
+                && (not requires(Receiver const& receiver) {
+                    typename C::template env_type<decltype(ex::get_env(receiver))>;
+                })
         struct state_rep<Receiver> {
             std::remove_cvref_t<Receiver> receiver;
             C                             context;
             template <typename R>
             state_rep(R&& r): receiver(std::forward<R>(r)), context(ex::get_env(this->receiver)) {}
+        };
+        template <typename Receiver>
+            requires requires(Receiver const& receiver) {
+                typename C::template env_type<decltype(ex::get_env(receiver))>;
+            }
+        struct state_rep<Receiver> {
+            using upstream_env = decltype(ex::get_env(std::declval<std::remove_cvref_t<Receiver>&>()));
+            std::remove_cvref_t<Receiver>               receiver;
+            typename C::template env_type<upstream_env> own_env;
+            C                                           context;
+            template <typename R>
+            state_rep(R&& r)
+                : receiver(std::forward<R>(r))
+                , own_env(ex::get_env(this->receiver))
+                , context(this->own_env)
+            {
+            }
         };
 
         template <typename Receiver>
@@ -166,7 +189,7 @@ namespace demo
             using operation_state_concept = ex::operation_state_t;
             using stop_token_t = decltype(ex::get_stop_token(ex::get_env(std::declval<Receiver>())));
             struct stop_link {
-                ex::inplace_stop_source& source;
+                stop_source_type& source;
                 void operator()() const noexcept { source.request_stop(); }
             };
             using stop_callback_t = ex::stop_callback_for_t<stop_token_t, stop_link>;
@@ -177,7 +200,7 @@ namespace demo
             {
             }
             std::coroutine_handle<promise_type> handle;
-            ex::inplace_stop_source             source;
+            stop_source_type                    source;
             std::optional<stop_callback_t>      stop_callback;
 
             void start() & noexcept {
@@ -208,8 +231,8 @@ namespace demo
                     break;
                 }
             }
-            ex::inplace_stop_token get_stop_token() override {
-                if (!this->stop_callback) {
+            stop_token_type get_stop_token() override {
+                if (this->source.stop_possible() && not this->stop_callback) {
                     this->stop_callback.emplace(ex::get_stop_token(ex::get_env(this->receiver)), stop_link(this->source));
                 }
                 return this->source.get_token();
