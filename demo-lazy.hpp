@@ -11,7 +11,6 @@
 #include "demo-inline_scheduler.hpp"
 #include <concepts>
 #include <coroutine>
-#include <iostream>
 #include <optional>
 #include <type_traits>
 
@@ -131,9 +130,8 @@ namespace demo
             state_base*                          state{};
             
             std::coroutine_handle<> unhandled_stopped() {
-                std::cout << "unhandled_stopped()\n" << std::flush;
                 this->state->complete(this->result);
-                return {};
+                return std::noop_coroutine();
             }
 
             struct env {
@@ -250,7 +248,7 @@ namespace demo
 
         std::coroutine_handle<promise_type> handle;
         lazy(std::coroutine_handle<promise_type> h): handle(std::move(h)) {}
-        lazy(lazy const& other): handle(other.handle) { std::cout << "**** lazy was copied!\n" << std::flush; }
+        lazy(lazy const& other): handle(other.handle) {}
         lazy(lazy&& other): handle(std::exchange(other.handle, {})) {}
         ~lazy() {
             if (this->handle) {
@@ -260,7 +258,7 @@ namespace demo
         template <typename Receiver>
         state<Receiver> connect(Receiver receiver)
         {
-            return state<Receiver>(std::forward<Receiver>(receiver), std::move(this->handle));
+            return state<Receiver>(std::forward<Receiver>(receiver), std::exchange(this->handle, {}));
         }
     };
 
