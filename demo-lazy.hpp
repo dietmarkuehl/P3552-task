@@ -52,7 +52,8 @@ namespace demo
         using completion_signatures = ex::completion_signatures<
             typename completion<T>::type,
             ex::set_error_t(std::exception_ptr),
-            ex::set_error_t(std::error_code)
+            ex::set_error_t(std::error_code),
+            ex::set_stopped_t()
         >;
 
         struct void_t {};
@@ -129,7 +130,11 @@ namespace demo
             std::optional<scheduler_type>        scheduler{};
             state_base*                          state{};
             
-            std::coroutine_handle<> unhandled_stopped() { return {}; }
+            std::coroutine_handle<> unhandled_stopped() {
+                std::cout << "unhandled_stopped()\n" << std::flush;
+                this->state->complete(this->result);
+                return {};
+            }
 
             struct env {
                 promise_type const* promise;
@@ -213,6 +218,9 @@ namespace demo
             }
             void complete(promise_base<std::remove_cvref_t<T>>::result_t& result) override {
                 switch (result.index()) {
+                case 0:
+                    ex::set_stopped(std::move(this->receiver));
+                    break;
                 case 1:
                     if constexpr (std::same_as<void, T>) {
                         ex::set_value(std::move(this->receiver));

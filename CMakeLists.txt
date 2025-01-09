@@ -20,6 +20,7 @@ list(
   beman-loop
   beman-return
   beman-stopped
+  demo-co_await-result
   demo-affinity
   demo-alloc
   demo-friendly
