@@ -30,12 +30,12 @@ namespace {
 int main()
 {
     ex::sync_wait([]()->beman::task::task<void>{
-        int value = co_await ex::just(0);
-        std::tuple<int, bool> tuple = co_await ex::just(0, true);
-        // co_await ex::just_error(0);
-        // co_await ex::just_stopped();
+        int value = co_await ex::just(0); (void)value;
+        std::tuple<int, bool> tuple = co_await ex::just(0, true); (void)tuple;
+        co_await ex::just_error(0);
+        co_await ex::just_stopped();
         // task requires exactly one set_value completion: co_await multi_sender<>{};
-        int mv = co_await multi_sender<int>{};
+        int mv = co_await multi_sender<int>{}; (void)mv;
         // task requires exactly one set_value completion: co_await multi_sender<int, bool>{};
     }());
     std::cout << "\n";
