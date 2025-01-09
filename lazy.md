@@ -493,62 +493,49 @@ may modify the completion signatures.
 
 ## Result Type For `co_await`
 
-**TODO** turn into text: result type for co_await
+When `co_await`ing a sender `s` in a coroutine, `s` needs to be
+transformed to an awaitable. The existing approach to do so is to
+use `execution::as_waitable(s)` in the promise type's `await_transform`
+and the intention for `lazy` is to use exactly that approach. The
+awaitable returned from `as_awaitable(s)` has the following behavior:
 
-- status quo based on `execution::as_awaitable(sender)`:
-    - Exactly one `set_value_t(T...)` completion
-    - `set_value_t()` => `void`
-    - `set_value_t(T)` => `decay_t<T>`
-    - `set_value_t(T0, T1, ...)` => `tuple<decay_t<T>...>`
-- `co_await just_stopped()` could indicate cancellation; supported
-   by stdexec.
-- `co_await just_error(error)` would be reasonable for completions
-    always indicating failure; supported by stdexec.
-- the result type is already inconsistent instead of always
-    `tuple<decay_t<T>...>` => support multiple `set_value_t`
-    completions and produce a `variant<tuple<T...>...>`
-- the last option is different from `co_await into_variant<sender>`
-    as it treats `set_stopped_t()` and `set_error_t(error)` differently
-- it may be reasonable to detect specific shapes of completion
-    signatures and turn them into something more coroutine friendly like
-    an `optional<T>` or an `expected<T, E>`; alternatively, support
-    corresponding algorithms like `into_optional`, `into_expected`
+1. When `s` complets with `set_stopped()` the function `unhandled_stopped()`
+    on the promise type is called and the awaiting coroutine is never
+    resumed. For `lazy` the `unhandled_stopped()` results in `lazy` itself
+    also completing with `set_stopped()`.
+2. When `s` completes with `set_error(e)` the coroutine is resumed
+    and the `co_await s` expression results in `e` being thrown as an
+    exceptions.
+3. When `s` completes with `set_value(a...)` the expression `co_await s`
+    produced a result corresponding the arguments to `set_value`:
 
-Changes to the status quo would be applied to `as_awaitable(sender)`
-to get consistent behavior for user-define coroutine tasks using
-`as_awaitable` or `with_awaitable_sender`.
+    1. If the argument list is empty, the result of `co_await s` is `void`.
+    2. Other, if the argument list contains exactly one element of type `T` the
+        result of `co_await s` has type `T` with the corresponding value.
+    3. Otherwise the result of `co_await s` is `tuple(a...)`.
 
-To make the proposed `co_await` result type more concrete, here is an
-example using a custom sender type `custom` for which the completion signatures
-can be explicitly specified:
+The sender `s` can have at most one `set_value_t` completion
+signature: if there are more than one `set_value_t` completion
+signatures `as_awaitable(s)` is invalid and fails to compile: users
+who want to `co_await` a sender with more than one `set_value_t`
+completions need to use `co_await into_variant(s)` (or similar) to
+transform the completion signatures appropriately.
 
-    namespace ex = std::execution;
+Note that the sender `s` can have no `set_value_t` completion
+signatures.  In this case the result type of the awaitable returned
+from `as_awaitable(s)` is declard to have `void` but `co_await s`
+would never return normally: the only ways to complete without a
+`set_value_t` completion is to complete with `set_stopped()` or
+with `set_error(e)` for some error `e`.
 
-    template <typename... Completions>
-    struct custom {
-        using sender_concept = ex::sender_t;
-        using completion_signatures = ex::completion_signatures<
-            ex::set_stopped_t(), Completions...
-        >;
+Here is an example which summarizes the different supported result types:
 
-        template <ex::receiver R>
-        struct state {
-            using operation_state_concept = ex::operation_state_t;
-            std::decay_t<R> r;
-            void start() & noexcept { ex::set_stopped(std::move(r)); }
-        };
-
-        template <ex::receiver R>
-        state<R> connect(R&& r) { return { std::forward<R>(r) }; }
-    };
-
-    ex::lazy<void> fun() {
-                                                          // co_await result type
-        co_await ex::just();                              // void
-        int i = co_await ex::just(0);                     // int
-        auto[i, b, c] = co_await ex::just(0, true, 'c');  // tuple<int, bool, char>
-        auto v = co_await custom<ex::set_value_t(), ex::set_value_t(int)>;
-                                          // variant<tuple<>, tuple<int>>
+    lazy<> fun() {
+        co_await ex::just();                               // void
+        auto v = co_await ex::just(0);                     // int
+        auto[i, b, c] = co_await ex::just(0, true, 'c');   // tuple<int, bool, char>
+        try { co_await ex::just_error(0); } catch (int) {} // exception
+        co_await ex::just_stopped();                       // cancel: never resumed
     }
 
 ## Scheduler Affinity
@@ -835,22 +822,14 @@ For example:
 When a coroutine task does the primary processing it may listen to
 a stop token to recognize that it got cancelled. Once it recognizes
 that its work should be stopped it should also complete with
-`set_stopped()`. Assuming work without any `set_value(T&&...)` completion
-can be awaited (see the discussion on the
-[`co_await` result type](#result-type-for-co_await)) this can be achieved
-with the help of `just_stopped()`:
+`set_stopped()`. There is no special syntax needed as that is the
+result of using `just_stopped()`:
 
     co_await ex::just_stopped();
 
 The sender `just_stopped()` completes with `set_stopped()` causing
 the coroutine to be cancelled. Any other sender completing with
 `set_stopped()` can also be used.
-
-In case a `set_value(T&&...)` completion is required for `co_await`
-a custom algorithm could be provided which behaves like `just_stopped()`
-but also claims to complete with `set_value()` to satisfy a requirement
-to have at least one `set_value(T&&...)` completion. The recommendation
-is to allow `co_await ex::just_stopped()` directly.
 
 ## Support Error Reporting Without Exception
 
@@ -1009,6 +988,11 @@ The first one
 ([`Folly::Task`](https://github.com/facebook/folly/blob/main/folly/coro/Task.h))
 isn't based on sender/receiver. Usage experience from all three
 have influenced the design of `lazy`.
+
+# Acknowledgements
+
+We would like to thank Ian Peterson and Alexey [??? TODO] for comments on drafts
+of this proposal and general guidance.
 
 # Proposed Wording
 
