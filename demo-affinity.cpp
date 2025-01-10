@@ -33,7 +33,6 @@ struct non_affine: demo::default_context {
 int main() {
     std::cout << std::unitbuf;
     demo::thread_pool pool;
-#if 0
     ex::sync_wait(ex::just() | ex::then([]()noexcept{ std::cout << "main:" << fmt_id << "\n"; }));
     ex::sync_wait(ex::schedule(pool.get_scheduler()) | ex::then([]()noexcept{ std::cout << "pool:" << fmt_id << "\n"; }));
     ex::sync_wait(ex::schedule(demo::any_scheduler(pool.get_scheduler())) | ex::then([]()noexcept{ std::cout << "any: " << fmt_id << "\n"; }));
@@ -51,14 +50,11 @@ int main() {
         co_await (ex::schedule(pool.get_scheduler()) | ex::then([]{ std::cout << "then:" << fmt_id << "\n"; }));
         std::cout << "cor2:" << fmt_id << "\n";
         }(pool));
-#endif
-#if 1
-    //-dk:TODO track down what goes wrong with this example!
+
     std::cout << "use inline_scheduler:\n";
     ex::sync_wait(ex::starts_on(demo::inline_scheduler{}, [](auto& pool)->demo::lazy<void> {
         std::cout << "cor1:" << fmt_id << "\n";
         co_await (ex::schedule(pool.get_scheduler()) | ex::then([]{ std::cout << "then:" << fmt_id << "\n"; }));
         std::cout << "cor2:" << fmt_id << "\n";
         }(pool)));
-#endif
 }

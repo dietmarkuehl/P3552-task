@@ -23,6 +23,7 @@ list(
   demo-co_await-result
   demo-affinity
   demo-alloc
+  demo-error
   demo-friendly
   demo-hello
   demo-query
