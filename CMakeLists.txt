@@ -20,11 +20,15 @@ list(
   beman-loop
   beman-return
   beman-stopped
+  demo-co_await-result
   demo-affinity
   demo-alloc
+  demo-error
   demo-friendly
   demo-hello
+  demo-query
   demo-result_example
+  demo-stop
 )
 
 list(
