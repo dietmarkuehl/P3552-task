@@ -1,7 +1,7 @@
 ---
 title: Add a Coroutine Lazy Type
 document: D3552R0
-date: 2024-01-06
+date: 2024-01-10
 audience:
     - Concurrency Working Group (SG1)
     - Library Evolution Working Group (LEWG)
@@ -44,7 +44,7 @@ a coroutine task needs to have a name. In previous discussion [SG1
 requested](https://wiki.edg.com/bin/view/Wg21rapperswil2018/P1056R0)
 that the name `task` is retained and LEWG choose `lazy` as an
 alternative.  It isn't clear whether the respective reasoning is
-still relevant. To the authors the name matters much less than
+still relevant. To the authors, the name matters much less than
 various other details of the interface.  Thus, the text is written
 in terms of `lazy`. The name is easily changed (prior to standarisation)
 if that is desired.
@@ -831,56 +831,160 @@ The sender `just_stopped()` completes with `set_stopped()` causing
 the coroutine to be cancelled. Any other sender completing with
 `set_stopped()` can also be used.
 
-## Support Error Reporting Without Exception
+## Error Reporting
 
-**TODO** turn into text: error reporting without exception
+The sender/receiver approach to error reporting is for operations
+to complete with a call to `set_error(r, e)` for some receiver
+object `r` and an error value `e`. The details of the completions
+are used by algorithms to decide how to proceed. For example, if
+any of the senders of `when_all(s...)` fails with a `set_error_t`
+completion the other senders are stopped and the overall operation
+fails itself forwarding the first error. Thus, it should be possible
+for coroutines to complete with a `set_error_t` completion as a
+completion using a `set_value_t` completion using an error value
+isn't quite the same.
 
-- The coroutine body can operate on the coroutine using `co_await`,
-    `co_return`, or `co_yield`
-- Using something like `co_return with_error(error)` could be used to
-    complete with `set_error_t(error)` instead of using `set_value_t`
-    - doing so would just require to detect a suitably named type like
-        `with_error<E>`
-    - sadly, a promise type can't have both `return_value(V)` and
-        `return_void()`, i.e., errors could only be reported if the
-        coroutine returns non-`void`
-    - that's not the preferred approach
-- A technique similar to `co_await sender` resulting in `set_stopped_t()`
-    could be used for errors, e.g., when completing with
-    `set_value_t(with_error<E>)` the `co_await` could result in the
-    coroutine to never get resumed and the `lazy` sender would
-    complete with `set_error_t(E)`
-    - The logic is rather hidden and possibly confusing.
-    - `co_await just_error(error)` throws an exception from the coroutine
-    - `co_await just(with_error(error))` completes with `set_error_t(error)`
-    - alternatively `co_await just_error(with_error(error))` does so
-    - that's not the preferred approach
-- `co_yield expression` isn't used for anything
-    - `co_yield with_error(error)` can complete with `set_error_t(error)`
-    - the completion is triggered from the awaiter's `await_suspend` such
-        that the coroutine is suspended when completion is triggered
-    - `co_yield just_error(error)` (or possibly even some general sender)
-        does not work: `co_yield` doesn't await its argument
-    - `co_yield with_stopped()` could be used for cancellation
-    - note: the coroutine will not be resumed after a `co_yield`: instead
-        the senders completes
-    - that's the preferred approach
-- To support error completions the completion signatures of `lazy<T, C>`
-    need to declare the relevant completion options. This declaration can
-    be made via the context `C`.
+The error reporting used for
+[`unifex`](https://github.com/facebookexperimental/libunifex) and
+[stdexec](https://github.com/NVIDIA/stdexec) is to turn an exception
+escaping from the coroutine into a `set_error_t(std::exception_ptr)`
+completion: when `unhandled_exception()` is called on the promise
+type the coroutine is suspended and the function can just call
+`set_value(r, std::get_current_exception())`. There are a few
+limitations with this approach:
 
-## Avoiding `set_error_t(exception_ptr)`
+1. The only supported error completion is `set_error_t(std::exception_ptr)`.
+    While the thrown exception can represent any error type and
+    `set_error_t` completions from `co_await`ed operations resulting
+    in the corresponding error being thrown it is better if the
+    other error types can be reported, too.
+2. To report an error an exception needs to be thrown. In some
+    environments it is preferred to not throw exception or exceptions
+    may even be entirely banned or disabled which means that there
+    isn't a way to report errors from coroutines unless a different
+    mechanism is provided.
+3. The completion signatures for `lazy<T, C>` necessarily contain
+    `set_error_t(std::exception_ptr)` which is problematic when
+    exceptions are unavailable: `std::exception_ptr` may also be
+    unavailable. Also, without exception as it is impossible to
+    decode the error. It can be desirable to have coroutine which
+    don't declare such a completion signature.
 
-**TODO** turn into text avoiding set_error_t(exceptio_ptr)
+Before going into details on how errors can be reported it is
+necessary to provide a way for `lazy<T, C>` to control the error
+completion signatures.  Similar to the return type the error types
+cannot be deduced from the coroutine body. Instead, they can be
+declared using the context type `C`:
 
-- It may be desirable to avoid the `set_error_t(exception_ptr)` completion
-    especially in environments not supporting exceptions
-- For the `lazy<T, C>` type it cannot be detected if the coroutine is
-    declared as `noexcept`
-- unifex supports a variation of `unifex::task<T>` which doesn't complete
-    with `exception_ptr`
-- It would be possible to detect based on the context `C` what the
-    completion signatures for `lazy<T, C>` are.
+- If present, `typename C::error_signatures` is used to declare the
+    error types. This type needs be a specialization of
+    `completion_signatures` listing the valid `set_error_t`
+    completions.
+- If this nested type is not present,
+    `completion_signatures<set_error_t(std::exception_ptr)>` is
+    used as a default.
+
+The name can be adjusted and it would be possible to use a different
+type list template and listing the error types. The basic idea would
+remain the same, i.e., the possible error types are declared via the
+context type.
+
+Reporting an error by having an exception escape the coroutine is
+still possible but it doesn't necessarily result in a `set_error_t`:
+If an exception escapes the coroutine and `set_error_t(std::exception_ptr)`
+isn't one of the supported the `set_error_t` completions,
+`std::terminate()` is called. If an error is explicitly reported
+using somehow, e.g., using one of the approaches described below
+and the error type isn't supported, the program is ill-formed.
+
+The discussion below assumes the use of the class template `with_error<E>`
+to indicate that the coroutine completed with an error. It can be as
+simple as
+
+    template <typename E> struct with_error{ E error; };
+
+The name can be different although it shouldn't collide with already
+use names (like `error_code` or `upon_error`). Also, in some cases
+there isn't really a need to wrap the error into a recognisable
+class template. Using a marker type probably helps with readability
+and avoid ambiguities on other cases.
+
+Besides exceptions there are three possible ways how a coroutine
+can be exited:
+
+1. The coroutine is exited when using `co_return`, optionally
+    with an argument. Flowing off the end of a coroutine is equivalent
+    to explicitly using `co_return;` instead of flowing off. It
+    would be possible to turn the use of
+    
+        co_return with_error{error};
+
+    into a `set_error(error)` completion.
+
+    One restriction with this approach is that for a `lazy<void,
+    C>` the body can't contain `co_return with_error{e};`: the
+    `void` result requires that the promise type contains a function
+    `return_void()` and if that is present it isn't possible to
+    also have a `return_value(T)`.
+
+2. When a coroutine uses `co_await a;` the coroutine is in a suspended
+    state when `await_suspend(...)` of some awaiter is entered.
+    While the coroutine is suspended it can be safely destroyed. It
+    is possible to complete the coroutine in that state and have the
+    coroutine be cleaned up. This approach is used when the awaited
+    operation completes with `set_stopped()`. It is possible to
+    call `set_error(r, e)` for some receiver `r` and error `e` obtained via the
+    awaitable `a`. Thus, using
+
+        co_await with_error{error};
+    
+    could complete with `set_error(r, error)`.
+
+    Using the same notation for awaiting outstanding operations and
+    returning results from a coroutine is, however, somewhat
+    surprising. The name of the awaiter may need to become more
+    explicit like `exist_coroutine_with_error` if this approach should
+    be supported.
+
+3. When a coroutine uses `co_yield v;` the promise member
+    `yield_value(T)` is called which can return an awaiter `a`.
+    When `a`'s `await_suspend()` is called, the coroutine is suspended
+    and the operation can complete accordingly. Thus, using
+
+        co_yield with_error{error};
+    
+    could complete with `set_error(r, error)`. Using `co_yield` 
+    for the purpose of returning from a coroutine with a specific
+    result seems more expected than using `co_await`. 
+
+There are techically viable options for returning an error from a
+coroutine without requiring exceptions. Whether any of them is
+considered suitable from a readability point of view is a separate
+question.
+
+One concern which was raised with just not resuming the coroutine
+is that the time of destruction of variables used by the coroutine
+is different. The promise object can be destroyed before completing
+which might address the concern.
+
+Using `co_await` or `co_yield` to propagate error results out of
+the coroutine has a possibly interesting variation: in both of these
+case the error result may be conditionally produced, i.e., it is
+possible to complete with an error sometimes and to produce a value
+at other times. That could allow a pattern (using `co_yield` for the
+potential error return):
+
+    auto value = co_yield when_error(co_await into_expected(sender));
+
+The subexpression `into_expected(sender)` could turn the `set_value_t`
+and `set_error_t` into a suitable `std::expected<V, std::variant<E...>>`
+always reported using a `set_value_t` completion. The corresponding
+`std::expected` becomes the result of the `co_await`. Using `co_yield`
+with `when_error(e)` where `e` is an expected can then either produce
+`e.value()` as the reuslt of the `co_yield` expression or it can
+result in the coroutine completing with the error from `e.error()`.
+Using this approach produces a fairly compact approach to propagating
+the error retaining the type and without using exceptions.
 
 ## Avoiding Stack Overflow
 
