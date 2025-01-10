@@ -234,10 +234,7 @@ namespace demo
             std::optional<stop_callback_t>      stop_callback;
 
             void start() & noexcept {
-                if constexpr (requires{ scheduler_type(ex::get_scheduler(ex::get_env(this->receiver))); })
-                    handle.promise().scheduler.emplace(ex::get_scheduler(ex::get_env(this->receiver)));
-                else
-                    handle.promise().scheduler.emplace(scheduler_type());
+                handle.promise().scheduler.emplace(ex::get_scheduler(ex::get_env(this->receiver)));
                 handle.promise().state = this;
                 handle.resume();
             }

@@ -38,6 +38,9 @@ namespace demo {
         static_assert(ex::sender<sender>);
 
         using scheduler_concept = ex::scheduler_t;
+        inline_scheduler() = default;
+        template <typename Scheduler>
+        explicit inline_scheduler(Scheduler&&) { static_assert(ex::scheduler<Scheduler>); }
         sender schedule() noexcept { return {}; }
         bool operator== (inline_scheduler const&) const = default;
     };
