@@ -13,6 +13,7 @@
 #include <coroutine>
 #include <optional>
 #include <type_traits>
+#include <iostream> //-dk:TODO remove
 
 // ----------------------------------------------------------------------------
 
@@ -27,8 +28,24 @@ namespace demo
             awaiter.disabled(); // remove this to get an awaiter unfriendly coroutine
         };
 
+    template <typename E>
     struct with_error {
-        std::error_code error;
+        E error;
+
+        // the members below are only need for co_await with_error{...}
+        static constexpr bool await_ready() noexcept { return false; }
+        template <typename Promise>
+            requires requires(Promise p, E e){
+                p.result.template emplace<E>(std::move(e));
+                p.state->complete(p.result);
+            }
+        void await_suspend(std::coroutine_handle<Promise> handle)
+            noexcept(noexcept(handle.promise().result.template emplace<E>(std::move(this->error))))
+        {
+            handle.promise().result.template emplace<E>(std::move(this->error));
+            handle.promise().state->complete(handle.promise().result);
+        }
+        static constexpr void await_resume() noexcept {}
     };
 
     struct default_context
@@ -61,7 +78,8 @@ namespace demo
             using result_t = std::variant<std::monostate, T, std::exception_ptr, std::error_code>;
             result_t result;
             void return_value(T&& value) { this->result.template emplace<T>(std::forward<T>(value)); }
-            void return_value(demo::with_error error) { this->result.template emplace<std::error_code>(error.error); }
+            template <typename E>
+            void return_value(demo::with_error<E> with) { this->result.template emplace<E>(with.error); }
         };
         template <>
         struct promise_base<void> {
@@ -110,18 +128,22 @@ namespace demo
                 this->result.template emplace<std::exception_ptr>(std::current_exception());
             }
             lazy get_return_object() { return { std::coroutine_handle<promise_type>::from_promise(*this)}; }
+
+            template <typename E>
+            auto await_transform(with_error<E> with) noexcept { return std::move(with); }
             template <ex::sender Sender>
             auto await_transform(Sender&& sender) noexcept {
                 if constexpr (std::same_as<demo::inline_scheduler, scheduler_type>)
-                    return ex::as_awaitable(sender, *this);
+                    return ex::as_awaitable(std::forward<Sender>(sender), *this);
                 else
-                    return ex::as_awaitable(ex::continues_on(sender, *(this->scheduler)), *this);
+                    return ex::as_awaitable(ex::continues_on(std::forward<Sender>(sender), *(this->scheduler)), *this);
             }
             template <demo::awaiter Awaiter>
             auto await_transform(Awaiter&&) noexcept  = delete;
 
-            final_awaiter yield_value(std::error_code error) {
-                this->result.template emplace<std::error_code>(error);
+            template <typename E>
+            final_awaiter yield_value(with_error<E> with) noexcept {
+                this->result.template emplace<E>(with.error);
                 return {this};
             }
 
@@ -202,6 +224,11 @@ namespace demo
                 , handle(std::move(h))
             {
             }
+            ~state() {
+                if (this->handle) {
+                    this->handle.destroy();
+                }
+            }
             std::coroutine_handle<promise_type> handle;
             stop_source_type                    source;
             std::optional<stop_callback_t>      stop_callback;
@@ -216,24 +243,33 @@ namespace demo
             }
             void complete(promise_base<std::remove_cvref_t<T>>::result_t& result) override {
                 switch (result.index()) {
-                case 0:
+                case 0: // set_stopped
+                    this->reset_handle();
                     ex::set_stopped(std::move(this->receiver));
                     break;
-                case 1:
+                case 1: // set_value
                     if constexpr (std::same_as<void, T>) {
+                        reset_handle();
                         ex::set_value(std::move(this->receiver));
                     }
                     else {
-                        ex::set_value(std::move(this->receiver), std::move(std::get<1>(result)));
+                        auto r(std::move(std::get<1>(result)));
+                        this->reset_handle();
+                        ex::set_value(std::move(this->receiver), std::move(r));
                     }
                     break;
-                case 2:
-                    ex::set_error(std::move(this->receiver), std::move(std::get<2>(result)));
+                case 2: // set_error
+                    {
+                        auto r(std::move(std::get<2>(result)));
+                        this->reset_handle();
+                        ex::set_error(std::move(this->receiver), std::move(r));
+                    }
                     break;
-                case 3:
-                    std::error_code rc{std::move(std::get<3>(result))};
-                    if (this->handle) this->handle.destroy();
-                    ex::set_error(std::move(this->receiver), std::move(rc));
+                case 3: {
+                        auto r(std::move(std::get<3>(result)));
+                        this->reset_handle();
+                        ex::set_error(std::move(this->receiver), std::move(r));
+                    }
                     break;
                 }
             }
@@ -244,11 +280,22 @@ namespace demo
                 return this->source.get_token();
             }
             C& get_context() override { return this->context; }
+            void reset_handle() {
+                this->handle.destroy();
+                this->handle = {};
+            }
         };
 
         std::coroutine_handle<promise_type> handle;
         lazy(std::coroutine_handle<promise_type> h): handle(std::move(h)) {}
-        lazy(lazy const& other): handle(other.handle) {}
+#if 0
+        lazy(lazy const& other) = delete;
+#else
+        lazy(lazy const& other): handle(other.handle) {
+            std::cout << "lazy::lazy(lazy const&)\n" << std::flush;
+            assert(nullptr == "copy called");
+        }
+#endif
         lazy(lazy&& other): handle(std::exchange(other.handle, {})) {}
         ~lazy() {
             if (this->handle) {
@@ -263,13 +310,6 @@ namespace demo
     };
 
     struct error_awaiter {
-        static constexpr bool await_ready() noexcept { return false; }
-        template <typename Promise>
-        void await_suspend(std::coroutine_handle<Promise> handle) noexcept {
-            handle.promise().result.template emplace<std::error_code>(std::error_code{});
-            handle.promise().state->complete(handle.promise().result);
-        }
-        static constexpr void await_resume() noexcept {}
     };
 }
 
