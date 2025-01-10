@@ -1025,11 +1025,12 @@ particular:
 
 1. As `co_await`ing the result of an operation (or `co_yield`ing a
     a value) may suspend a coroutine, there is a potential to
-    introduce problems when resource which meant to be held temporarily
+    introduce problems when resources which meant to be held temporarily
     are held when suspending. For example, holding a lock to a mutex
     while suspending a coroutine can result in a different thread
     trying to release the lock when the coroutine is resumed on a
-    differen thread.
+    differen thread (scheduler affinity will move the resumed coroutine
+    to the same scheduler but not to the same thread).
 2. Destroying a coroutine is only safe when it is suspended. For
     task implementation that means that it shall only call a
     completion handler once the coroutine is suspended. That part
@@ -1095,8 +1096,8 @@ have influenced the design of `lazy`.
 
 # Acknowledgements
 
-We would like to thank Ian Peterson and Alexey [??? TODO] for comments on drafts
-of this proposal and general guidance.
+We would like to thank Ian Peterson, Alexey Spiridonov, and Lee
+Howes for comments on drafts of this proposal and general guidance.
 
 # Proposed Wording
 
