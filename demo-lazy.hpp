@@ -285,14 +285,7 @@ namespace demo
 
         std::coroutine_handle<promise_type> handle;
         lazy(std::coroutine_handle<promise_type> h): handle(std::move(h)) {}
-#if 0
         lazy(lazy const& other) = delete;
-#else
-        lazy(lazy const& other): handle(other.handle) {
-            std::cout << "lazy::lazy(lazy const&)\n" << std::flush;
-            assert(nullptr == "copy called");
-        }
-#endif
         lazy(lazy&& other): handle(std::exchange(other.handle, {})) {}
         ~lazy() {
             if (this->handle) {
@@ -304,9 +297,6 @@ namespace demo
         {
             return state<Receiver>(std::forward<Receiver>(receiver), std::exchange(this->handle, {}));
         }
-    };
-
-    struct error_awaiter {
     };
 }
 
