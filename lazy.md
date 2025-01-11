@@ -284,18 +284,22 @@ support there a number of required or desired features (listed in
 no particular order):
 
 1. A coroutine task needs to be awaiter/awaitable friendly, i.e., it
-    should be possibly to `co_await` awaitables. While that seems
+    should be possibly to `co_await` awaitables which includes both
+    library provided and user provided ones. While that seems
     obvious, it is possible to create an `await_transform` which
     is deleted for awaiters.
 2. When composing sender algorithms without using a coroutine it
     is common to adapt the results using suitable algorithms and
     the completions for sender algorithms are designed accordingly.
     On the other hand, when awaiting senders in a coroutine it may
-    be annoying considered having to transform the result into a
+    be considered annoying having to transform the result into a
     shape which is friendly to a coroutine use. Thus, it may be
     reasonable to support rewriting certain shapes of completion
     signatures into something different to make the use of senders
-    easier in a coroutine task.
+    easier in a coroutine task. See the section on the
+    [result type for `co_await`](#result-type-for-co_await) for a
+    discussion.
+
 3. A coroutine task needs to be sender friendly: it is expected that
     asynchronous code is often written using coroutines awaiting
     senders. However, depending on how senders are treated by a
@@ -507,26 +511,20 @@ awaitable returned from `as_awaitable(s)` has the following behavior:
     and the `co_await s` expression results in `e` being thrown as an
     exceptions.
 3. When `s` completes with `set_value(a...)` the expression `co_await s`
-    produced a result corresponding the arguments to `set_value`:
+    produces a result corresponding the arguments to `set_value`:
 
     1. If the argument list is empty, the result of `co_await s` is `void`.
-    2. Other, if the argument list contains exactly one element of type `T` the
-        result of `co_await s` has type `T` with the corresponding value.
-    3. Otherwise the result of `co_await s` is `tuple(a...)`.
+    2. Otherwise, if the argument list contains exactly one element
+        of type `T` the result of `co_await s` is `a`.
+    3. Otherwise, the result of `co_await s` is `std::tuple(a...)`.
 
-The sender `s` can have at most one `set_value_t` completion
-signature: if there are more than one `set_value_t` completion
-signatures `as_awaitable(s)` is invalid and fails to compile: users
-who want to `co_await` a sender with more than one `set_value_t`
-completions need to use `co_await into_variant(s)` (or similar) to
-transform the completion signatures appropriately.
-
-Note that the sender `s` can have no `set_value_t` completion
-signatures.  In this case the result type of the awaitable returned
-from `as_awaitable(s)` is declard to have `void` but `co_await s`
-would never return normally: the only ways to complete without a
-`set_value_t` completion is to complete with `set_stopped()` or
-with `set_error(e)` for some error `e`.
+Note that the sender `s` is allowed to have no `set_value_t`
+completion signatures.  In this case the result type of the awaitable
+returned from `as_awaitable(s)` is declared to be `void` but `co_await
+s` would never return normally: the only ways to complete without
+a `set_value_t` completion is to complete with `set_stopped()` or
+with `set_error(e)` for some error `e`, i.e., the expression either
+results in coroutine to be never resumed or an exception is thrown.
 
 Here is an example which summarizes the different supported result types:
 
@@ -537,6 +535,59 @@ Here is an example which summarizes the different supported result types:
         try { co_await ex::just_error(0); } catch (int) {} // exception
         co_await ex::just_stopped();                       // cancel: never resumed
     }
+
+The sender `s` can have at most one `set_value_t` completion
+signature: if there are more than one `set_value_t` completion
+signatures `as_awaitable(s)` is invalid and fails to compile: users
+who want to `co_await` a sender with more than one `set_value_t`
+completions need to use `co_await into_variant(s)` (or similar) to
+transform the completion signatures appropriately. It would be possible
+to move this transformation into `as_awaitable(s)`.
+
+Using effectively `into_variant(s)` isn't the only possible
+transformation if there are multiple `set_value_t` transformations.
+To avoid creating a fairly hard to use result object, `as_awaitable(s)`
+could detect certain usage patterns and rather create a result which
+is easier to use when being `co_await`ed. An example for this
+situation is the `queue.async_pop()` operation for [concurrent
+queues](https://wg21.link/P0260): this operation can complete
+successfully in two ways:
+
+    1. When an object was extracted the operation completes with `set_value(value)`.
+    2. When the queue was closed the operation completes with `set_value()`.
+
+Turning the result of `queue.async_pop()` into an awaitable
+using the current `std::execution::as_awaitable(queue.async_pop())`
+([[exec.as.awaitable](https://eel.is/c++draft/exec#as.awaitable)])
+fails because the function accepts only senders with at most
+one `set_value_t` completion. Thus, it is necessary to use something
+like the below:
+
+        lazy<> pop_demo(auto& queue) {
+            // auto value = co_await queue.async_pop(); // doesn't work
+            std::optional v0 = co_await (queue.async_pop() | into_optional);
+            std::optional v1 = co_await into_optional(queue.async_pop());
+        }
+
+The algorithm `into_optional(s)` would determine that there is
+exactly one `set_value_t` completion with parameters and produce an
+`std::optional<T>` if there is just one parameter of type `T` and
+produce a `std::optional<std::tuple<T...>>` if there are more than
+one parameter with types `T...`. It would be possible to apply this
+transformation when a corresponding set of completions is detected.
+The proposal [optional variants in sender/receiver](https://wg21.link/pTODO)
+goes into this direction.
+
+This proposal currently doesn't propose to a change to `as_awaitable`.
+The primary reason is that there are likely many different shapes
+of completions each with a different transformation. If these are
+all absorbed into `as_awaitable` it is likely fairly hard to reason
+what exact result is returned. Also, there are likely different
+options of how a result could be transformed: `into_optional` is just
+one example. It could be preferable to turn the two results into an
+`std::expected` instead. However, there should probably be some
+transformation algorithms like `into_optional`, `into_expected`, etc.
+similar to `into_variant`.
 
 ## Scheduler Affinity
 
@@ -1028,8 +1079,8 @@ particular:
     introduce problems when resources which meant to be held temporarily
     are held when suspending. For example, holding a lock to a mutex
     while suspending a coroutine can result in a different thread
-    trying to release the lock when the coroutine is resumed on a
-    differen thread (scheduler affinity will move the resumed coroutine
+    trying to release the lock when the coroutine is resumed 
+    (scheduler affinity will move the resumed coroutine
     to the same scheduler but not to the same thread).
 2. Destroying a coroutine is only safe when it is suspended. For
     task implementation that means that it shall only call a
