@@ -1,7 +1,7 @@
 ---
 title: Add a Coroutine Lazy Type
 document: D3552R0
-date: 2024-01-10
+date: 2024-01-11
 audience:
     - Concurrency Working Group (SG1)
     - Library Evolution Working Group (LEWG)
@@ -1158,7 +1158,7 @@ have influenced the design of `lazy`.
 
 # Acknowledgements
 
-We would like to thank Ian Peterson, Alexey Spiridonov, and Lee
+We would like to thank Ian Petersen, Alexey Spiridonov, and Lee
 Howes for comments on drafts of this proposal and general guidance.
 
 # Proposed Wording
