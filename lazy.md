@@ -369,7 +369,15 @@ no particular order):
     sometimes.
 11. In some situations it can be useful to somehow schedule an
     asychronous clean-up operation which is triggered upon
-    coroutine exit.
+    coroutine exit. See the section on [asynchronous clean-up](#asynchronous-clean-up)
+    below for more discussing
+12. The `lazy` coroutine provided by the standard library may
+    not always fit user's needs although they may need/want various
+    of the facilities. To avoid having users implement all functionality
+    from scretch `lazy` should use specified components which can
+    be used by users when building their own coroutine. The components
+    `as_awaitable` and `with_awaitable_sender` are two part of
+    achieving this obejctive.
 
 The algorithm `std::execution::as_awaitable` does turn a sender
 into an awaitable and is expected to be used by custom written
@@ -1044,7 +1052,8 @@ the error retaining the type and without using exceptions.
 - When always using scheduler affinity with a scheduler which doesn't
     immediately return the potential for stack overflows is avoided
 - Using an inline scheduler or avoiding the scheduler can expose
-    coroutines to stack overflows
+    coroutines to stack overflows and a form of deadlock [to be explained
+    with an example]
 - It should be possible to count the synchronous recursion depth
     and inject a scheduler which doesn't never immediately continues
 - This does introduce a small overhead even in cases where there is
@@ -1064,7 +1073,9 @@ The recommended direction is to support asynchronous resources
 independent of a coroutine task. For example the
 [async-object](https://wg21.link/p2849) proposal is in this direction.
 There is similar work ongoing in the context of
-[Folly](https://github.com/facebook/folly).
+[Folly](https://github.com/facebook/folly). Thus, there is currently
+not plan to support asynchronous clean-up as part of the `lazy`
+implementation.  Instead, it can be composed based on other facilities.
 
 # Caveats
 
