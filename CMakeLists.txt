@@ -14,12 +14,12 @@ add_subdirectory(libunifex)
 
 list(
   APPEND
-  BEMAN_EXAMPLES
+  xBEMAN_EXAMPLES
   demo-into_optional
 )
 list(
   APPEND
-  xBEMAN_EXAMPLES
+  BEMAN_EXAMPLES
   beman-affinity
   beman-alloc
   beman-loop
