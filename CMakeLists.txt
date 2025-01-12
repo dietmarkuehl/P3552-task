@@ -15,11 +15,12 @@ add_subdirectory(libunifex)
 list(
   APPEND
   xBEMAN_EXAMPLES
-  demo-into_optional
+  demo-async-lock
 )
 list(
   APPEND
   BEMAN_EXAMPLES
+  demo-async-lock
   beman-affinity
   beman-alloc
   beman-loop
@@ -27,6 +28,8 @@ list(
   beman-stopped
   demo-co_await-result
   demo-affinity
+  demo-container
+  demo-loop
   demo-alloc
   demo-error
   demo-friendly
