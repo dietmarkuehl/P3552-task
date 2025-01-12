@@ -779,10 +779,13 @@ query which determines whether a sender always completes inline could
 avoid the rescheduling. Something like that is implemented for
 [`unifex`](https://github.com/facebookexperimental/libunifex):
 senders define a property `blocking` which can have the value
-`blocking_kind::always_inline`. For a standard version it seems a
-sender query `get_blocking(sender, env)` providing an indication
-on whether and how the sender completes could be reasonable but is
-probably a different paper.
+`blocking_kind::always_inline`.  The proposal [A sender query for
+completion behaviour](https://wg21.link/P3206) proposes a
+`get_completion_behaviour(sndr, env)` customization point to address
+this need. The result can indicate that the `sndr` returns synchronously
+(using `completion_behaviour::synchronous` or
+`completion_behavior::inline_completion`). If `sndr` returns synchronously
+there isn't a need to reschedule it.
 
 In some situations it is desirable to explicitly switch to a different
 scheduler from within the coroutine and from then on carry on using
@@ -1155,9 +1158,10 @@ it eventually overflows.
 With senders it is also not possible to use symmetric transfer to
 combat the problem: to achieve the full generality and composing
 senders, there are still multiple function calls used, e.g., when
-producing the completion signal. Some senders could be written such
-that they are awaiters as well such that symmetric transfer would
-help avoiding stack overflows but that isn't a general solution.
+producing the completion signal. Using `get_completion_behavior`
+from the propos [A sender query for completion behaviour](https://wg21.link/P3206)
+could allow detecting senders which complete synchronously. In these
+cases the stack overflow could be avoided relying on symmetric transfer.
 
 When using scheduler affinity the transfer of control via a scheduler
 which doesn't complete immediately does avoid the risk of stack
