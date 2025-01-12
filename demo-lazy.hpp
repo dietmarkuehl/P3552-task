@@ -284,7 +284,9 @@ namespace demo
         };
 
         std::coroutine_handle<promise_type> handle;
+private:
         lazy(std::coroutine_handle<promise_type> h): handle(std::move(h)) {}
+public:
         lazy(lazy const& other) = delete;
         lazy(lazy&& other): handle(std::exchange(other.handle, {})) {}
         ~lazy() {
@@ -292,6 +294,9 @@ namespace demo
                 this->handle.destroy();
             }
         }
+        lazy& operator= (lazy const&) = delete;
+        lazy& operator= (lazy&&) = delete;
+
         template <typename Receiver>
         state<Receiver> connect(Receiver receiver)
         {
