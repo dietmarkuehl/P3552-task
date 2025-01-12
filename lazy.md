@@ -499,9 +499,56 @@ may modify the completion signatures.
 
 ## `lazy` constructors and assignments
 
-**TODO** ctor and assignments
+Coroutines are created via a factory function which returns the
+coroutine type and whose body uses one of the `co_*` function, e.g.
 
-- use guidance from [P1056](https://wg21.link/p1056) and [P2506](https://wg21.link/p2506)
+    lazy<> nothing(){ co_return; }
+
+The actual object is created via the promise type's `get_return_object`
+function and it is between the promise type and coroutine type how
+that actually works: this constructor is an implementation detail.
+
+To be valid senders the coroutine type needs to be destructible and it
+needs to have a move constructor. Other than that, constructors and
+assignments either don't make sense or enable dangerous practices:
+
+1. Copy constructor and copy assignment don't make sense because there
+    is no way to copy the actual coroutine state.
+2. Move assignment is rather questionable because it makes it easy to
+    transport the coroutine away from referenced entities.
+3. Previous papers [P1056](https://wg21.link/p1056) and
+    [P2506](https://wg21.link/p2506) also argued against a move
+    assignment. However, one of the arguments doesn't apply to the
+    `lazy` proposed here: There is no need to deal with cancellation
+    when assigning or destroying a `lazy` object. Upon `start()`
+    of `lazy` the coroutine handle is transferred to an operation
+    state and ther original coroutine object doesn't have any
+    reference to the object anymore.
+4. If there is no assignment, a default constructed object doesn't make
+    much sense, i.e., `lazy` also doesn't have a default constructor.
+
+Based on experience with [Folly](https://github.com/facebook/folly)
+the suggestion was even stronger: `lazy` shouldn't even have move
+construction! That would mean that `lazy` can't be a sender or that
+there would need to be some internal interface enabling the necessary
+transfer. That direction isn't pursued in this proposal.
+
+The lack of move assignment doesn't mean that `lazy` can't be held
+in a container: it is perfectly fine `push_back` objects of this
+type into a container:
+
+    std::vector<ex::lazy<>> cont;
+    cont.emplace_back([]->ex::lazy<> { co_return; }());
+    cont.push_back([]->ex::lazy<> { co_return; }());
+
+The expectation is that most of the time coroutines don't end up
+in normal containers. Instead, they'd be managed by a
+[`counting_scope`](https://wg21.link/p3149) or hold on to by objects
+in a work graph composed of senders.
+
+Technically there isn't a problem adding a default constructor, move
+assignment, and a `swap()` function. Based on experience with similar
+components it seems `lazy` is better off not having them.
 
 ## Result Type For `co_await`
 
@@ -602,16 +649,32 @@ similar to `into_variant`.
 Coroutines look very similar to synchronous code with a few
 `co`-keywords sprinkled over the code. When reading such code the
 expectation is typically that all code executes on the same context
-despite some `co_await` using sender which may explicitly change
-the scheduler. Users may run a query and do some lengthy computation
-with the result of the query and would be surprised if that blocked
-other queries from being made. Thus, the execution should normally
-be transferred back to the original scheduler: this transfer of the
-execution with a coroutine is referred to as _scheduler affinity_.
-Note: a scheduler may execute on multiple threads, e.g., for a pool
-scheduler: execution would get to any of these threads, i.e., thread
-local storage is _not_ guaranteed to access the same data even with
-scheduler affinity.
+despite some `co_await` expression using senders which may explicitly
+change the scheduler. There various issues when using `co_await`
+naïvely:
+
+* Users may expect that work continues on the same context where it
+    was started. If the coroutine simply resumes when the `co_await`ed
+    senders calls a completion function code may execute some lengthy
+    operation on context which is expected to keep a UI responsive
+    or which is meant to deal with I/O.
+* Conversely, running a loop `co_await`ing some work may be seens as
+    unproblematic but may actually easily cause a stack overflow if
+    `co_await`ed work immediately completes (also
+    [see below](#avoiding-stack-overflow)).
+* When `co_await`ing some work completes on a different context and
+    later a blocking call is made from the coroutine which also ends
+    up `co_await`ing some work from the same resource there is a dead
+    lock.
+
+Thus, the execution should normally be scheduled on the original
+scheduler: doing so can avoid the problems mentioned above (assuming
+a scheduler is used which doesn't immediately complete without
+actually scheduling anything). This transfer of the execution with
+a coroutine is referred to as _scheduler affinity_.  Note: a scheduler
+may execute on multiple threads, e.g., for a pool scheduler: execution
+would get to any of these threads, i.e., thread local storage is
+_not_ guaranteed to access the same data even with scheduler affinity.
 
 The basic idea for scheduler affinity consists of a few parts:
 
@@ -1047,19 +1110,67 @@ the error retaining the type and without using exceptions.
 
 ## Avoiding Stack Overflow
 
-**TODO** turn into text: avoiding stack overflow
+It is easy to use a coroutine to accidentally create a stack overflow
+because loops don't really execute like loops. For example, a
+coroutine like this can easily result in a stack overflow:
 
-- When always using scheduler affinity with a scheduler which doesn't
-    immediately return the potential for stack overflows is avoided
-- Using an inline scheduler or avoiding the scheduler can expose
-    coroutines to stack overflows and a form of deadlock [to be explained
-    with an example]
-- It should be possible to count the synchronous recursion depth
-    and inject a scheduler which doesn't never immediately continues
-- This does introduce a small overhead even in cases where there is
-    no danger of stack overflows
-- Use symmetric transfer together with making some of the senders
-    awaiters
+    ex::sync_wait(ex::write_env(
+        [] -> ex::lazy<void> {
+            for (int i{}; i < 1000000; ++i)
+                co_await ex::just(i);
+        }(),
+        ex::make_env(ex::get_scheduler, ex::inline_scheduler{})
+    ));
+    
+The reason this innocent looking code creates a stack overflow is
+that the use of `co_await` results in some function calls to suspend
+the coroutine and then further function calls to resume the coroutine
+(for a proper explanation see, e.g., Lewis Baker's
+[Understanding Symmetric Transfer](https://lewissbaker.github.io/2020/05/11/understanding_symmetric_transfer)).
+As a result, the stack grows with each iteration of the loop until
+it eventually overflows.
+
+With senders it is also not possible to use symmetric transfer to
+combat the problem: to achieve the full generality and composing
+senders, there are still multiple function calls used, e.g., when
+producing the completion signal. Some senders could be written such
+that they are awaiters as well such that symmetric transfer would
+help avoiding stack overflows but that isn't a general solution.
+
+When using scheduler affinity the transfer of control via scheduler
+which doesn't complete immediately does avoid the risc of stack
+overflow: even when the `co_await`ed work immediately completes as
+part of the `await_suspend` call of the created awaiter the coroutine
+isn't immediately resumed. Instead, the work is scheduled and the
+coroutine is suspended. The thread unwinds its stack until it
+reaches its own scheduling and picks up the next entity to execute.
+
+When using `sync_wait(s)` the `run_loop`'s scheduler is used and
+it may very well just resume the just suspended corotuine: when
+there is scheduling happening as part of scheduler affinity it
+doesn't mean that work gets scheduled on a different thread! 
+
+The problem with stack overflows does remain when the work resumes
+immediately despite using scheduler affinity. That may be the case
+when using an inline scheduler, i.e., a scheduler with an operation
+state whose `start()` immediately completes: the scheduled work gets
+executed as soon as `set_value()` is called.
+
+Another potential for stack overflows is when optimizing the behavior
+for work is known to not move to another scheduler: in that case
+there isn't really any need to use `continue_on` to get back to the
+scheduler where the operation was started! The execution remained
+on that scheduler all along. However, not rescheduling the work
+means that the stack isn't unwound.
+
+Since `lazy` uses scheduler affinity by default, stack overflow
+shouldn't be a problem and there is no separate provision required
+to combat stack overflow. If the implementation chooses to avoid
+rescheduling work it will need to make sure that doing so doesn't
+cause any problems, e.g., by rescheduling the work sometimes. When
+using an inline scheduler the user will need to be very careful to
+not overflow the stack or cause any of the various other problems
+with executing immediately.
 
 ## Asynchronous Clean-Up
 
@@ -1163,14 +1274,15 @@ Howes for comments on drafts of this proposal and general guidance.
 
 # Proposed Wording
 
-**TODO**: the intent is to have all relevant wording in place by the
-time the paper needs to be submitted on 2025-01-13 and remove/augment
-it according to the outcome of discussions in SG1 and/or LEWG.
+The intent is to have all relevant wording in place before the
+Hagenberg meeting.
 
+Based on the discussion the wording would get
 Entities to describe:
 - `inline_scheduler`
 - `any_scheduler`
 - `lazy`
+- any internally used tool
 - <code><i>allocator_of_t<i></code> exposition-only?
 - <code><i>scheduler_of_t<i></code> exposition-only?
 - <code><i>stop_source_of_t<i></code> exposition-only?
