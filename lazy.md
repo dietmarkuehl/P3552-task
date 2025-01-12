@@ -1,7 +1,7 @@
 ---
 title: Add a Coroutine Lazy Type
 document: D3552R0
-date: 2024-01-11
+date: 2024-01-12
 audience:
     - Concurrency Working Group (SG1)
     - Library Evolution Working Group (LEWG)
@@ -22,16 +22,16 @@ support that a suitable class needs to be defined and this proposal
 is providing such a definition.
 
 Just to get an idea what this proposal is about: here is a simple
-`Hello, world` written using a coroutine test:
+`Hello, world` written using the proposed coroutine type:
 
-    #include <beman/execution26/execution.hpp>
-    #include "demo-lazy.hpp" //-dk:TODO should be <beman/lazy26/lazy.hpp>
+    #include <execution>
     #include <iostream>
+    #include <task>
 
-    namespace ex = beman::execution26;
+    namespace ex = std::execution;
 
     int main() {
-        return std::get<0>(*ex::sync_wait([]->demo::lazy<int> {
+        return std::get<0>(*ex::sync_wait([]->ex::lazy<int> {
             std::cout << "Hello, world!\n";
             co_return co_await ex::just(0);
         }()));
@@ -42,7 +42,7 @@ Just to get an idea what this proposal is about: here is a simple
 Just to get it out of the way: the class (template) used to implement
 a coroutine task needs to have a name. In previous discussion [SG1
 requested](https://wiki.edg.com/bin/view/Wg21rapperswil2018/P1056R0)
-that the name `task` is retained and LEWG choose `lazy` as an
+that the name `task` is retained and LEWG chose `lazy` as an
 alternative.  It isn't clear whether the respective reasoning is
 still relevant. To the authors, the name matters much less than
 various other details of the interface.  Thus, the text is written
@@ -53,7 +53,7 @@ if that is desired.
 
 This proposal isn't the first to propose a coroutine type. Prior proposals
 didn't see any recent (post introduction of sender/receiver) update although
-corresponding proposals were discussed informally in multiple occassions.
+corresponding proposals were discussed informally on multiple occasions.
 There are also implementations of coroutine types based on a sender/receiver
 model in active use. This section provides an overview of this prior work
 and where relevant of corresponding discussions. This section is primarily
@@ -87,8 +87,8 @@ are details on how the coroutine is implemented.
 [Discussion for P1056r0 in SG1](https://wiki.edg.com/bin/view/Wg21rapperswil2018/P1056R0)
 
 - The task doesn't really have anything to do with concurrency.
-- Decomposing a task cheaply is fundamental. The [HALO
-  Optimisations](https://wg21.link/P0981R0) help.
+- Decomposing a task cheaply is fundamental. The
+  [HALO Optimisations](https://wg21.link/P0981R0) help.
 - The `task` isn't move assignable because there are better approaches
   than using containers to hold them. It is move constructible as there
   are no issues with overwriting a potentially live task.
@@ -99,7 +99,7 @@ are details on how the coroutine is implemented.
   thread is hazardous. Static analysers should be able to detect these cases.
 - Votes confirmed the no move assignment and forwarding to LEWG assuming
   the name is not `task`.
-- Votes against to deal with associated executors and a request to have
+- Votes against deal with associated executors and a request to have
   strong language about transfer between threads.
 
 ## [P2506](https://wg21.link/P2506): std::lazy: a coroutine for deferred execution
@@ -112,7 +112,7 @@ the working paper, the proposal did _not_ take a sender/receiver
 interface into account.
 
 Although there were mails seemingly scheduling a discussion in LEWG
-I didn't manage to actually locate any.
+we didn't manage to actually locate any discussion notes.
 
 ## [cppcoro](https://github.com/lewissbaker/cppcoro)
 
@@ -149,10 +149,11 @@ In both cases the task starts suspended and is resumed when it is
 resumed which is similar to `start(op)`ing an operation state `op`.
 The coroutine body needs to use `co_await` or `co_return`. `co_await`
 expects an awaitable or an awaiter as argument. Using `co_yield`
-is not supported. The implementations support symmetic transfer but
+is not supported. The implementation supports symmetric transfer but
 doesn't mention allocators.
 
-The `shared_task<T>` is similar to a `split(sender)`: in both cases
+The `shared_task<T>` is similar to
+[`split(sender)`](https://eel.is/c++draft/exec.split): in both cases
 the same result is produced for multiple consumers. Correspondingly,
 there isn't a need to support a separate `shared_task<T>` in a
 sender/receiver world. Likewise, throwing of results can be avoid
@@ -176,17 +177,19 @@ As `unifex` is sender/receiver-based, its `unifex::task<T>` is
 implemented such that `co_await` can deal with senders in addition
 to awaitables or awaiters. Also, `unifex::task<T>` is _scheduler
 affine_: the coroutine code resumes on the same scheduler even if a
-sender completed on a different scheduler. The corresponding scheduler
-is taken from the receiver.  The exception for this rule is when
-explicitly awaiting the result of `scheduler(scheduler)`.  The
-relevant treatment is in the promise type's `await_transform()`:
+sender completed on a different scheduler. The task's scheduler
+is taken from the receiver it is `connect`ed to.  The exception for
+rescheduling on the task's scheduler is explicitly awaiting the
+result of `schedule(sched)` for some scheduler `sched`: the operation
+changes the task's scheduler to be `sched`.  The relevant treatment
+is in the promise type's `await_transform()`:
 
-- If a sender `s` which is result of `schedule(scheduler)` is
-  `co_await`ed, the corresponding `scheduler` is installed as the
-  task's scheduler and the task resume on the result of completing
-  `s`. Feedback from people working with unifex suggests that this
-  choice for changing the scheduler is too subtle. While it is
-  considered important to explicitly change the scheduler a task
+- If a sender `sndr` which is the result of `schedule(sched)` is
+  `co_await`ed, the corresponding `sched` is installed as the task's
+  scheduler and the task resumes on the context completing `sndr`.
+  Feedback from people working with unifex suggests that this choice
+  for changing the scheduler is too subtle. While it is considered
+  important to be able to explicitly change the scheduler a task
   executes on, doing so should be more explicit.
 - For both senders and awaiters being awaited, the coroutine
   will be resumed on the task's current scheduler when the task is
@@ -195,35 +198,38 @@ relevant treatment is in the promise type's `await_transform()`:
   scheduler)`. The rescheduling is avoided when the sender is tagged
   as not changing scheduler (using a `static constexpr` member named
   `blocking` which is initialised to `blocking_kind::always_inline`).
-- If a sender `s` is `co_await`ed it gets `connect`ed to a receiver
-  provided by the task to form an awaiter holding the operation
-  state which gets `start`ed by the awaiter's `await_suspend`. The
-  receiver arranges for the `set_value` completion to become a
-  result return from `await_resume`, a `set_error` completon to
-  become an exception, and a `set_done` completion to resume an
-  a special "on done" coroutine handle rather than resuming the task
-  itself.
+- If a sender is `co_await`ed it gets `connect`ed to a receiver
+  provided by the task to form an awaiter holding an operation
+  state. The operation state gets `start`ed by the awaiter's
+  `await_suspend`. The receiver arranges for a `set_value` completion
+  to become a value returned from `await_resume`, a `set_error`
+  completion to become an exception, and a `set_done` completion
+  to resume a special "on done" coroutine handle rather than resuming
+  the task itself effectively behaving like an uncatchable exception
+  (all relevant state is properly destroyed and the coroutine is
+  never resumed).
 
-When `co_await`ing a sender `s` there can be at most one `set_value`
-completion: if there is more than one `set_value` completion the
-`await_transform` will do nothing and the result sending cannot be
-`co_await`ed (unless it is also given an awaitable interface). The
-result type of `co_await s` depends on the number of arguments to
-`set_value`:
+When `co_await`ing a sender `sndr` there can be at most one `set_value`
+completion: if there are more than one `set_value` completions the
+promise type's `await_transform` will just return `sndr` and the
+result cannot be `co_await`ed (unless it is also given an awaitable
+interface). The result type of `co_await sndr` depends on the number
+of arguments to `set_value`:
 
-- If there are no arguments for `set_value`  then the type of `co_await s`
+- If there are no arguments for `set_value` then the type of `co_await sndr`
     will be `void`.
 - If there is exactly one argument of type `T` for `set_value`
-    then the type of `co_await s` will be `T`.
+    then the type of `co_await sndr` will be `T`.
 - If there are more than one arguments for `set_value` then
-    the type of `co_await s` will be `std::tuple<T1, T2, ...>`
+    the type of `co_await sndr` will be `std::tuple<T1, T2, ...>`
     with the corresponding argument types.
 
 If a receiver doesn't have a scheduler, it can't be `connect()`ed
-to a `unifex::task<T>`. In particular, when using a
-`unifex::async_scope s` it isn't possible to directly call `s.spawn(t)`
-with a `unifex::task<T> t` as the `async_scope` doesn't provide a
-scheduler.
+to a `unifex::task<T>`. In particular, when using a `unifex::async_scope
+scope` it isn't possible to directly call `scope.spawn(task)` with
+a `unifex::task<T> task` as the `unifex::async_scope` doesn't provide
+a scheduler. The `unifex::async_scope` provides a few variations
+of `spawn()` which take a scheduler as argument.
 
 `unifex` provides some sender algorithms to transform the sender
 result into something which may be more suitable to be `co_await`ed.
@@ -233,19 +239,20 @@ cancellation completion `set_done` into a `set_value` completion
 with a disengaged `std::optional<T>`.
 
 The `unifex::task<T>` is itself a sender and can be used correspondingly.
-To deal with scheduler affinity a type erase scheduler
+To deal with scheduler affinity a type erased scheduler
 `unifex::any_scheduler` is used.
 
 The `unifex::task<T>` doesn't have allocator support. When creating
 a task multiple objects are allocated on the heap: it seems there
 is a total of 6 allocations for each `unifex::task<T>` being created.
-After that, it seem the different `co_await`s don't use a separate
+After that, it seems the different `co_await`s don't use a separate
 allocation.
 
 The `unifex::task<T>` doesn't directly guard against stack overflow.
 Due to rescheduling continuations on a scheduler when the completion
 isn't always inline, the issue only arises when `co_await`ing many
-senders with `blocking_kind::always_inline`.
+senders with `blocking_kind::always_inline` or when the scheduler
+resumes inline.
 
 ## [stdexec](https://github.com/NVIDIA/stdexec)
 
@@ -272,8 +279,7 @@ which forwards the stop requests from the environment of the receiver
 which is connected to the task.
 
 Like the unifex task `exec::task<T, C>` doesn't provide any allocator
-support. When creating a task there are two allocations and an
-additional allocation for each `co_await`.
+support. When creating a task there are two allocations.
 
 # Objectives
 
@@ -287,7 +293,7 @@ no particular order):
     should be possibly to `co_await` awaitables which includes both
     library provided and user provided ones. While that seems
     obvious, it is possible to create an `await_transform` which
-    is deleted for awaiters.
+    is deleted for awaiters and that should be prohibited.
 2. When composing sender algorithms without using a coroutine it
     is common to adapt the results using suitable algorithms and
     the completions for sender algorithms are designed accordingly.
@@ -328,10 +334,11 @@ no particular order):
     always continuing on the same thread: a scheduler may refer to
     a thread pool and the task will continue on one of the threads
     (which also means that thread local storage cannot be used to
-    propagate contexts implicitly; see the discussion on environments
+    propagate contexts implicitly; see the [discussion on environments](#environment-support)
     below).
 5. When using coroutines there will probably be an allocation at
-    least for the coroutine frame. To support the use in environments
+    least for the coroutine frame (the [HALO optimisations](https://wg21.link/P0981R0)
+    optimisation can't always work). To support the use in environments
     where memory allocations using `new`/`delete` aren't supported
     the coroutine task should support allocations using allocators.
 6. Receivers have associated environments which can support an open
@@ -348,7 +355,7 @@ no particular order):
     used when a child operation queries `get_scheduler` from the
     receiver's environment. Also, in non-asynchronous code it is
     quite common to pass some form of context implicitly using
-    thread local storage. In an asynchronous world the such contexts
+    thread local storage. In an asynchronous world such contexts
     could be forwarded using the environment.
 7. The coroutine should be able to indicate that it was cancelled,
     i.e., to get `set_stopped()` called on the task's receiver.
@@ -358,15 +365,15 @@ no particular order):
 8. Similar to indicating that a task got cancelled it would be good
     if a task could indicate that an error occurred without throwing
     an exception which escapes from the coroutine.
-9. In general a task has to assume that an exception escapes a the
+9. In general a task has to assume that an exception escapes the
     coroutine implementation. As a result, the task's completion
     signatures need to include `set_error_t(std::exception_ptr)`.
     If it can be indicated to the task that no exception will escape
     the coroutine, this completion signature can be avoided.
 10. When many `co_await`ed operations complete synchronously, there
     is a chance for stack overflow. It may be reasonable to have
-    the implementation prevent that by using a suitable scheduler
-    sometimes.
+    the implementation prevent stack overflow by using a suitable
+    scheduler sometimes.
 11. In some situations it can be useful to somehow schedule an
     asychronous clean-up operation which is triggered upon
     coroutine exit. See the section on [asynchronous clean-up](#asynchronous-clean-up)
@@ -376,21 +383,21 @@ no particular order):
     of the facilities. To avoid having users implement all functionality
     from scretch `lazy` should use specified components which can
     be used by users when building their own coroutine. The components
-    `as_awaitable` and `with_awaitable_sender` are two part of
-    achieving this obejctive.
+    `as_awaitable` and `with_awaitable_sender` are two parts of
+    achieving this obejctive but there are likely others.
 
-The algorithm `std::execution::as_awaitable` does turn a sender
-into an awaitable and is expected to be used by custom written
-coroutines. Likewise, it is intended that custom coroutines use
-the CRTP class template `std::execution::with_awaitable_senders`.
-It may be reasonable to adjust the functionality of these components
-instead of defining the functionality specific to a `lazy<...>`
-coroutine task.
+    The algorithm `std::execution::as_awaitable` does turn a sender
+    into an awaitable and is expected to be used by custom written
+    coroutines. Likewise, it is intended that custom coroutines use
+    the CRTP class template `std::execution::with_awaitable_senders`.
+    It may be reasonable to adjust the functionality of these
+    components instead of defining the functionality specific to a
+    `lazy<...>` coroutine task.
 
 It is important to note that different coroutine task implementations
 can live side by side: not all functionality has to be implemented
 by the same coroutine task. The objective for this proposal is to
-select a set of features which is provides a coroutine task suitable
+select a set of features which provides a coroutine task suitable
 for most uses. It may also be reasonable to provide some variations
 as different names. A future revision of the standard or third party
 libraries can also provide additional variations.
@@ -438,19 +445,19 @@ customization are at least:
     the strategy for obtaining the coroutine's scheduler.
  - Configure [allocator awareness](#allocator-support).
  - Indicate that the coroutine should be [noexcept](#avoiding-set_error_texception_ptr).
- - Define [additional error types](#support-error-reporting-without-exception)
+ - Define [additional error types](#support-error-reporting-without-exception).
 
 The default context should be used such that any empty type provides
 the default behavior instead of requiring a lot of boilerplate just
-to configure an particular aspect. For example, it should be possible
-to selectively disable [allocator support](#allocator-support) using
+to configure a particular aspect. For example, it should be possible
+to selectively enable [allocator support](#allocator-support) using
 something like this:
 
-    struct disable_allocator_context: {
-        using allocator_type = void;
+    struct allocator_aware_context {
+        using allocator_type = std::pmr::polymorphic_allocator<std::byte>;
     };
     template <typename T>
-    using my_lazy = ex::lazy<T, disable_allocator_context>;
+    using my_lazy = ex::lazy<T, allocator_aware_context>;
 
 Using various different types for task coroutines isn't a problem
 as the corresponding objects normally don't show up in containers.
@@ -492,9 +499,7 @@ a result, the default completion signatures for `lazy<T>` are
         ex:set_stopped()
     >;
 
-Support for
-[reporting an error without exception](#support-error-reporting-without-exception)
-and supporting a [declaration for not throwing](#avoiding-set_error_texception_ptr)
+Support for [reporting an error without exception](#error-reporting)
 may modify the completion signatures.
 
 ## `lazy` constructors and assignments
@@ -505,9 +510,8 @@ coroutine type and whose body uses one of the `co_*` function, e.g.
     lazy<> nothing(){ co_return; }
 
 The actual object is created via the promise type's `get_return_object`
-function and it is between the promise type and coroutine type how
+function and it is between the promise and coroutine types how
 that actually works: this constructor is an implementation detail.
-
 To be valid senders the coroutine type needs to be destructible and it
 needs to have a move constructor. Other than that, constructors and
 assignments either don't make sense or enable dangerous practices:
@@ -516,13 +520,14 @@ assignments either don't make sense or enable dangerous practices:
     is no way to copy the actual coroutine state.
 2. Move assignment is rather questionable because it makes it easy to
     transport the coroutine away from referenced entities.
-3. Previous papers [P1056](https://wg21.link/p1056) and
+
+    Previous papers [P1056](https://wg21.link/p1056) and
     [P2506](https://wg21.link/p2506) also argued against a move
     assignment. However, one of the arguments doesn't apply to the
     `lazy` proposed here: There is no need to deal with cancellation
     when assigning or destroying a `lazy` object. Upon `start()`
     of `lazy` the coroutine handle is transferred to an operation
-    state and ther original coroutine object doesn't have any
+    state and the original coroutine object doesn't have any
     reference to the object anymore.
 4. If there is no assignment, a default constructed object doesn't make
     much sense, i.e., `lazy` also doesn't have a default constructor.
@@ -531,11 +536,11 @@ Based on experience with [Folly](https://github.com/facebook/folly)
 the suggestion was even stronger: `lazy` shouldn't even have move
 construction! That would mean that `lazy` can't be a sender or that
 there would need to be some internal interface enabling the necessary
-transfer. That direction isn't pursued in this proposal.
+transfer. That direction isn't pursued by this proposal.
 
 The lack of move assignment doesn't mean that `lazy` can't be held
-in a container: it is perfectly fine `push_back` objects of this
-type into a container:
+in a container: it is perfectly fine to `push_back` objects of this
+type into a container, e.g.:
 
     std::vector<ex::lazy<>> cont;
     cont.emplace_back([]->ex::lazy<> { co_return; }());
@@ -552,34 +557,35 @@ components it seems `lazy` is better off not having them.
 
 ## Result Type For `co_await`
 
-When `co_await`ing a sender `s` in a coroutine, `s` needs to be
-transformed to an awaitable. The existing approach to do so is to
-use `execution::as_waitable(s)` in the promise type's `await_transform`
-and the intention for `lazy` is to use exactly that approach. The
-awaitable returned from `as_awaitable(s)` has the following behavior:
+When `co_await`ing a sender `sndr` in a coroutine, `sndr` needs to
+be transformed to an awaitable. The existing approach is to use
+`execution::as_waitable(sndr)` [[exex.as.awaitable]](https://eel.is/c++draft/exec.as.awaitable)
+in the promise type's `await_transform` and `lazy` uses that approach.
+The awaitable returned from `as_awaitable(sndr)` has the following
+behavior (`rcvr` is the receiver the sender `sndr` is connected to):
 
-1. When `s` complets with `set_stopped()` the function `unhandled_stopped()`
+1. When `sndr` completes with `set_stopped(std::move(rcvr))` the function `unhandled_stopped()`
     on the promise type is called and the awaiting coroutine is never
-    resumed. For `lazy` the `unhandled_stopped()` results in `lazy` itself
-    also completing with `set_stopped()`.
-2. When `s` completes with `set_error(e)` the coroutine is resumed
-    and the `co_await s` expression results in `e` being thrown as an
+    resumed. The `unhandled_stopped()` results in `lazy` itself
+    also completing with `set_stopped_t()`.
+2. When `sndr` completes with `set_error(std::move(rcvr), error)` the coroutine is resumed
+    and the `co_await sndr` expression results in `error` being thrown as an
     exceptions.
-3. When `s` completes with `set_value(a...)` the expression `co_await s`
+3. When `sndr` completes with `set_value(std::move(rcvr), a...)` the expression `co_await sndr`
     produces a result corresponding the arguments to `set_value`:
 
-    1. If the argument list is empty, the result of `co_await s` is `void`.
-    2. Otherwise, if the argument list contains exactly one element
-        of type `T` the result of `co_await s` is `a`.
-    3. Otherwise, the result of `co_await s` is `std::tuple(a...)`.
+    1. If the argument list is empty, the result of `co_await sndr` is `void`.
+    2. Otherwise, if the argument list contains exactly one element the result of `co_await sndr` is `a...`.
+    3. Otherwise, the result of `co_await sndr` is `std::tuple(a...)`.
 
-Note that the sender `s` is allowed to have no `set_value_t`
+Note that the sender `sndr` is allowed to have no `set_value_t`
 completion signatures.  In this case the result type of the awaitable
-returned from `as_awaitable(s)` is declared to be `void` but `co_await
-s` would never return normally: the only ways to complete without
-a `set_value_t` completion is to complete with `set_stopped()` or
-with `set_error(e)` for some error `e`, i.e., the expression either
-results in coroutine to be never resumed or an exception is thrown.
+returned from `as_awaitable(sndr)` is declared to be `void` but
+`co_await sndr` would never return normally: the only ways to
+complete without a `set_value_t` completion is to complete with
+`set_stopped(std::move(rcvr)` or with `set_error(std::move(rcvr),
+error)`, i.e., the expression either results in the coroutine to
+be never resumed or an exception being thrown.
 
 Here is an example which summarizes the different supported result types:
 
@@ -591,28 +597,28 @@ Here is an example which summarizes the different supported result types:
         co_await ex::just_stopped();                       // cancel: never resumed
     }
 
-The sender `s` can have at most one `set_value_t` completion
+The sender `sndr` can have at most one `set_value_t` completion
 signature: if there are more than one `set_value_t` completion
-signatures `as_awaitable(s)` is invalid and fails to compile: users
+signatures `as_awaitable(sndr)` is invalid and fails to compile: users
 who want to `co_await` a sender with more than one `set_value_t`
 completions need to use `co_await into_variant(s)` (or similar) to
 transform the completion signatures appropriately. It would be possible
-to move this transformation into `as_awaitable(s)`.
+to move this transformation into `as_awaitable(sndr)`.
 
 Using effectively `into_variant(s)` isn't the only possible
 transformation if there are multiple `set_value_t` transformations.
-To avoid creating a fairly hard to use result object, `as_awaitable(s)`
+To avoid creating a fairly hard to use result object, `as_awaitable(sndr)`
 could detect certain usage patterns and rather create a result which
 is easier to use when being `co_await`ed. An example for this
 situation is the `queue.async_pop()` operation for [concurrent
 queues](https://wg21.link/P0260): this operation can complete
 successfully in two ways:
 
-    1. When an object was extracted the operation completes with `set_value(value)`.
-    2. When the queue was closed the operation completes with `set_value()`.
+1. When an object was extracted the operation completes with `set_value(std::move(rcvr), value)`.
+2. When the queue was closed the operation completes with `set_value(std::move(rcvr))`.
 
 Turning the result of `queue.async_pop()` into an awaitable
-using the current `std::execution::as_awaitable(queue.async_pop())`
+using the current `as_awaitable(queue.async_pop())`
 ([[exec.as.awaitable](https://eel.is/c++draft/exec#as.awaitable)])
 fails because the function accepts only senders with at most
 one `set_value_t` completion. Thus, it is necessary to use something
@@ -624,48 +630,49 @@ like the below:
             std::optional v1 = co_await into_optional(queue.async_pop());
         }
 
-The algorithm `into_optional(s)` would determine that there is
-exactly one `set_value_t` completion with parameters and produce an
+The algorithm `into_optional(sndr)` would determine that there is
+exactly one `set_value_t` completion with arguments and produce an
 `std::optional<T>` if there is just one parameter of type `T` and
 produce a `std::optional<std::tuple<T...>>` if there are more than
 one parameter with types `T...`. It would be possible to apply this
 transformation when a corresponding set of completions is detected.
-The proposal [optional variants in sender/receiver](https://wg21.link/pTODO)
+The proposal [optional variants in sender/receiver](https://wg21.link/P3570)
 goes into this direction.
 
-This proposal currently doesn't propose to a change to `as_awaitable`.
+This proposal currently doesn't propose a change to `as_awaitable`
+([[exec.as.awaitable](https://eel.is/c++draft/exec#as.awaitable)]).
 The primary reason is that there are likely many different shapes
-of completions each with a different transformation. If these are
-all absorbed into `as_awaitable` it is likely fairly hard to reason
-what exact result is returned. Also, there are likely different
-options of how a result could be transformed: `into_optional` is just
-one example. It could be preferable to turn the two results into an
-`std::expected` instead. However, there should probably be some
-transformation algorithms like `into_optional`, `into_expected`, etc.
-similar to `into_variant`.
+of completions each with a different desirable transformation. If
+these are all absorbed into `as_awaitable` it is likely fairly hard
+to reason what exact result is returned. Also, there are likely
+different options of how a result could be transformed: `into_optional`
+is just one example. It could be preferable to turn the two results
+into an `std::expected` instead. However, there should probably be
+some transformation algorithms like `into_optional`, `into_expected`,
+etc.  similar to `into_variant`.
 
 ## Scheduler Affinity
 
 Coroutines look very similar to synchronous code with a few
 `co`-keywords sprinkled over the code. When reading such code the
 expectation is typically that all code executes on the same context
-despite some `co_await` expression using senders which may explicitly
-change the scheduler. There various issues when using `co_await`
+despite some `co_await` expressions using senders which may explicitly
+change the scheduler. There are various issues when using `co_await`
 naïvely:
 
 * Users may expect that work continues on the same context where it
     was started. If the coroutine simply resumes when the `co_await`ed
     senders calls a completion function code may execute some lengthy
-    operation on context which is expected to keep a UI responsive
+    operation on a context which is expected to keep a UI responsive
     or which is meant to deal with I/O.
 * Conversely, running a loop `co_await`ing some work may be seens as
     unproblematic but may actually easily cause a stack overflow if
     `co_await`ed work immediately completes (also
     [see below](#avoiding-stack-overflow)).
 * When `co_await`ing some work completes on a different context and
-    later a blocking call is made from the coroutine which also ends
-    up `co_await`ing some work from the same resource there is a dead
-    lock.
+    later a blocking call is made from the coroutine which also
+    ends up `co_await`ing some work from the same resource there
+    can be a dead lock.
 
 Thus, the execution should normally be scheduled on the original
 scheduler: doing so can avoid the problems mentioned above (assuming
@@ -675,16 +682,18 @@ a coroutine is referred to as _scheduler affinity_.  Note: a scheduler
 may execute on multiple threads, e.g., for a pool scheduler: execution
 would get to any of these threads, i.e., thread local storage is
 _not_ guaranteed to access the same data even with scheduler affinity.
+Also, scheduling work has some cost even if this cost can often be
+fairly small.
 
 The basic idea for scheduler affinity consists of a few parts:
 
 1. A scheduler is determined when `start`ing an operation state
     which resulted from `connect`ing a coroutine to a receiver.
     This scheduler is used to resume execution of the coroutine.
-    The scheduler is determined based on the receiver `r`'s
+    The scheduler is determined based on the receiver `rcvr`'s
     environment.
 
-        auto scheduler = get_scheduler(get_env(r));
+        auto scheduler = get_scheduler(get_env(rcvr));
 
 2. The type of `scheduler` is unknown when the coroutine is created.
     Thus, the coroutine implementation needs to operate in terms
@@ -696,7 +705,7 @@ The basic idea for scheduler affinity consists of a few parts:
     to deal with arbitrary schedulers (and small object optimisations
     to avoid allocations). The used scheduler type can be parameterized
     to allow use of `lazy` contexts where the scheduler type is
-    known.
+    known, e.g., to avoid the costs of type erasure.
 
 3. When an operation which is `co_await`ed completes the execution
      is transferred to the held scheduler using `continues_on`.
@@ -704,9 +713,9 @@ The basic idea for scheduler affinity consists of a few parts:
      promise type's `await_transform`:
 
         template <ex::sender Sender>
-        auto await_transform(Sender&& sender) noexcept {
+        auto await_transform(Sender&& sndr) noexcept {
             return ex::as_awaitable_sender(
-                ex::continues_on(std::forward<Sender>(sender),
+                ex::continues_on(std::forward<Sender>(sndr),
                                  this->scheduler);
             );
         }
@@ -714,15 +723,15 @@ The basic idea for scheduler affinity consists of a few parts:
 There are a few immediate issues with the basic idea:
 
 1. What should happen if there is no scheduler, i.e.,
-    `get_scheduler(get_env(r))` doesn't exist?
+    `get_scheduler(get_env(rcvr))` doesn't exist?
 2. What should happen if the obtained `scheduler` is incompatible with
     the coroutine's scheduler?
 3. Scheduling isn't free and despite the potential problems it should
     be possible to use `lazy` without scheduler affinity.
 4. When operations are known to complete inline the scheduler isn't
     actually changed and the scheduling operation should be avoided.
-5. It should be possible to explicitly change the context from
-    within a coroutine.
+5. It should be possible to explicitly change the scheduler used by
+    a coroutine from within this coroutine.
     
 All of these issues can be addressed although there are different
 choices in some of these cases. 
@@ -730,15 +739,17 @@ choices in some of these cases.
 In many cases the receiver can provide access to a scheduler via
 the environment query. An example where no scheduler is available
 is when starting a task on a [`counting_scope`](https://wg21.link/p3149).
-The scope doesn't know about any receivers and, thus, receiver
-doesn't support the `get_scheduler` query:
+The scope doesn't know about any schedulers and, thus, the receiver
+used by `counting_scope` when `connect`ing to a sender doesn't
+support the `get_scheduler` query, i.e., this example doesn't work:
 
     ex::spawn([]->ex::lazy<void> { co_await ex::just(); }(), token);
 
-Using `spawn()` with work is expected to be quite common, i.e., it
-isn't just a theoretical possibility.  The approach used by
+Using `spawn()` with coroutines doing the actual work is expected
+to be quite common, i.e., it isn't just a theoretical possibility that
+`lazy` is used together with `counting_scope`.  The approach used by
 [`unifex`](https://github.com/facebookexperimental/libunifex) is
-to fail compilation when trying to `connect` a `Task` with a receiver
+to fail compilation when trying to `connect` a `Task` to a receiver
 without a scheduler. The approach taken by
 [`stdexec`](https://github.com/NVIDIA/stdexec) is to keep executing
 inline in that case. Based on the experience that silently changing
@@ -764,13 +775,13 @@ When operations actually don't change the scheduler there shouldn't
 be a need to schedule them again. In these cases it would be great
 if the `continues_on` could be avoided. At the moment there is no
 way to tell whether a sender will complete inline. Using a sender
-query which determines whether sender always completes inline could
+query which determines whether a sender always completes inline could
 avoid the rescheduling. Something like that is implemented for
 [`unifex`](https://github.com/facebookexperimental/libunifex):
 senders define a property `blocking` which can have the value
 `blocking_kind::always_inline`. For a standard version it seems a
 sender query `get_blocking(sender, env)` providing an indication
-on whether and how the sender copmletes could be reasonable but is
+on whether and how the sender completes could be reasonable but is
 probably a different paper.
 
 In some situations it is desirable to explicitly switch to a different
@@ -784,11 +795,12 @@ awaiter for this purpose and use, e.g.
     auto previous = co_await co_continue_on(new_scheduler);
 
 Using this statement replaces the coroutine's scheduler with the
-`new_scheduler`. Continuing after `co_await`ing operations gets
-scheduled on the `new_scheduler`. The result of `co_await`ing
-`co_continue_on` is the previously used scheduler to allow transfer
-back to this scheduler. In [stdexec](https://github.com/NVIDIA/stdexec)
-the corresponding operation is called `reschedule_coroutine`.
+`new_scheduler`. When the `co_await` completes it is on `new_scheduler`
+and further `co_await` operations complete on `new_scheduler`. The
+result of `co_await`ing `co_continue_on` is the previously used
+scheduler to allow transfer back to this scheduler. In
+[stdexec](https://github.com/NVIDIA/stdexec) the corresponding
+operation is called `reschedule_coroutine`.
 
 Another advantage of scheduling the operations on a scheduler instead
 of immediately continuing on the context where the operation completed
@@ -832,7 +844,7 @@ extract the allocator, if any, from the list of parameters and use
 that for the purpose of allocation. The matching `operator delete`
 gets passed only the pointer to release and the originally requested
 `size`. To have access to the correct allocator in `operator delete`
-it either needs to be stateless or a copy needs to be accessible
+the allocator either needs to be stateless or a copy needs to be accessible
 via the pointer passed to `operator delete`, e.g., stored at the
 offset `size`.
 
@@ -843,7 +855,7 @@ is obtained from the context argument `C` of `lazy<T, C>`:
     using allocator_type = ex::allocator_of_t<C>;
 
 This `using` alias uses `typename C::allocator_type` if present or
-defaults to `std::::allocator<std::byte>` otherwise.  This
+defaults to `std::allocator<std::byte>` otherwise.  This
 `allocator_type` has to be for the type `std::byte` (if necessary
 it is possible to relax that constraint).
 
@@ -857,12 +869,13 @@ query. The arguments passed to the coroutine are also available to
 the constructor of the promise type (if there is a matching on) and
 the allocator can be obtained from there:
 
-    struct alloc_aware {
+    struct allocator_aware_context {
         using allocator_type = pmr::polymorphic_allocator<std::byte>;
     };
     fixed_resource<2048> resource;
 
-    ex::sync_wait([](auto&&, auto* resource)-> ex::lazy<void, alloc_aware> {
+    ex::sync_wait([](auto&&, auto* resource)
+            -> ex::lazy<void, allocator_aware_context> {
         auto alloc = co_await ex::read_env(ex::get_allocator);
         use(alloc);
     }(allocator_arg, &resource));
@@ -872,38 +885,44 @@ the allocator can be obtained from there:
 When `co_await`ing child operations these may want to access an
 environment. Ideally, the coroutine would expose the environment
 from the receiver it gets `connect`ed to. Doing so isn't directly
-possible because the coroutine doesn't know about environment type
-and the queries also don't know the type they are going to return.
+possible because the coroutine types doesn't know about receiver
+type which in turn determines the environment type. Also, the
+queries don't know the type they are going to return. Thus, some
+extra mechanisms are needed to provide an environment.
 
 A basic environment can be provided by some entities already known
 to the coroutine, though:
 
 - The `get_scheduler` query should provide the scheduler maintained
     for [scheduler affinity](#scheduler-affinity) whose type is
-    determined based on the coroutine's context.
+    determined based on the coroutine's context using
+    `ex::scheduler_of_t<C>`.
 - The `get_allocator` query should provide the
     [coroutine's allocator](#allocator-support) whose type is
-    determined based on the coroutine's context and which gets
-    initialized when constructing the promise type.
-- The `get_stop_token` query should provide an stop token
+    determined based on the coroutine's context using `ex::allocator_of_t<C>`.
+    The allocator gets initialized when constructing the promise type.
+- The `get_stop_token` query should provide a stop token
     from a stop source which is linked to the stop token obtained
     from the receiver's environment. The type of the stop source
-    can be configured using `C::stop_source_type` and defaults to
-    `ex::inplace_stop_source. Linking the stop source can be delayed
-    until the first stop token is requested or omitted entirely if
-    `stop_possible()` returns `false`.
+    is determined from the coroutine's context using
+    `ex::stop_source_of_t<C>` and defaults to `ex::inplace_stop_source`.
+    Linking the stop source can be delayed until the first stop
+    token is requested or omitted entirely if `stop_possible()`
+    returns `false` or if the stop token type of the coroutine's
+    receiver matches that of `ex::stop_source_of_t<C>`.
 
 For any other environment query the context `C` of `lazy<T, C>` can
 be used. The coroutine can maintain an instance of type `C`. In many
 cases queries from the environment of the coroutine's `receiver` need
-to be forwarded. Let `upstream_env` be `get_env(receiver)` and `UpstreamEnv`
-the type of `upstream_env`.  `C` gets optionally constructed
+to be forwarded. Let `env` be `get_env(receiver)` and `Env`
+be the type of `env`.  `C` gets optionally constructed
 with access to the environment:
- 1. If `C::env_type<UpstreamEnv>` is a valid type the coroutine
-    state will contain an object `env` of this type which is
-    constructed with `upstream_env`. This object will live at least
+
+ 1. If `C::env_type<Env>` is a valid type the coroutine
+    state will contain an object `own_env` of this type which is
+    constructed with `env`. The object `own_env` will live at least
     as long as the `C` object maintained and `C` is constructed
-    with a reference to `env`, allowing `C` to reference type-erased
+    with a reference to `own_env`, allowing `C` to reference type-erased
     representations for query results it needs to forward.
  2. Otherwise, if `C(env)` is valid the `C` object is constructed
     with the result of `get_env(receiver)`. Constructing the context
@@ -927,24 +946,24 @@ For example:
 
     int main() {
         ex::sync_wait(
-            ex::detail::write_env(
+            ex::write_env(
                 []->demo::lazy<void, context> {
                     auto sched(co_await ex::read_env(get_scheduler));
                     auto value(co_await ex::read_env(get_value));
                     std::cout << "value=" << value << "\n";
                     // ...
                 }(),
-                ex::detail::make_env(get_value, 42)
+                ex::make_env(get_value, 42)
             )
         );
     }
 
 ## Support For Requesting Cancellation/Stopped
 
-When a coroutine task does the primary processing it may listen to
+When a coroutine task executes the actual work it may listen to
 a stop token to recognize that it got cancelled. Once it recognizes
 that its work should be stopped it should also complete with
-`set_stopped()`. There is no special syntax needed as that is the
+`set_stopped(rcvr)`. There is no special syntax needed as that is the
 result of using `just_stopped()`:
 
     co_await ex::just_stopped();
@@ -956,15 +975,15 @@ the coroutine to be cancelled. Any other sender completing with
 ## Error Reporting
 
 The sender/receiver approach to error reporting is for operations
-to complete with a call to `set_error(r, e)` for some receiver
-object `r` and an error value `e`. The details of the completions
+to complete with a call to `set_error(rcvr, err)` for some receiver
+object `rcvr` and an error value `err`. The details of the completions
 are used by algorithms to decide how to proceed. For example, if
-any of the senders of `when_all(s...)` fails with a `set_error_t`
+any of the senders of `when_all(sndr...)` fails with a `set_error_t`
 completion the other senders are stopped and the overall operation
 fails itself forwarding the first error. Thus, it should be possible
-for coroutines to complete with a `set_error_t` completion as a
-completion using a `set_value_t` completion using an error value
-isn't quite the same.
+for coroutines to complete with a `set_error_t` completion. Using a
+`set_value_t` completion using an error value isn't quite the same
+as these are not detected as errors by algorithms.
 
 The error reporting used for
 [`unifex`](https://github.com/facebookexperimental/libunifex) and
@@ -985,7 +1004,9 @@ limitations with this approach:
     may even be entirely banned or disabled which means that there
     isn't a way to report errors from coroutines unless a different
     mechanism is provided.
-3. The completion signatures for `lazy<T, C>` necessarily contain
+3. To extract the actual error information from `std::exception_ptr`
+    the exception has to be rethrown.
+4. The completion signatures for `lazy<T, C>` necessarily contain
     `set_error_t(std::exception_ptr)` which is problematic when
     exceptions are unavailable: `std::exception_ptr` may also be
     unavailable. Also, without exception as it is impossible to
@@ -1016,8 +1037,8 @@ still possible but it doesn't necessarily result in a `set_error_t`:
 If an exception escapes the coroutine and `set_error_t(std::exception_ptr)`
 isn't one of the supported the `set_error_t` completions,
 `std::terminate()` is called. If an error is explicitly reported
-using somehow, e.g., using one of the approaches described below
-and the error type isn't supported, the program is ill-formed.
+somehow, e.g., using one of the approaches described below,
+and the error type isn't supported by the context's `error_signatures`, the program is ill-formed.
 
 The discussion below assumes the use of the class template `with_error<E>`
 to indicate that the coroutine completed with an error. It can be as
@@ -1029,7 +1050,7 @@ The name can be different although it shouldn't collide with already
 use names (like `error_code` or `upon_error`). Also, in some cases
 there isn't really a need to wrap the error into a recognisable
 class template. Using a marker type probably helps with readability
-and avoid ambiguities on other cases.
+and avoiding ambiguities in other cases.
 
 Besides exceptions there are three possible ways how a coroutine
 can be exited:
@@ -1039,12 +1060,12 @@ can be exited:
     to explicitly using `co_return;` instead of flowing off. It
     would be possible to turn the use of
     
-        co_return with_error{error};
+        co_return with_error{err};
 
-    into a `set_error(error)` completion.
+    into a `set_error(std::move(rcvr), err)` completion.
 
-    One restriction with this approach is that for a `lazy<void,
-    C>` the body can't contain `co_return with_error{e};`: the
+    One restriction with this approach is that for a
+    `lazy<void, C>` the body can't contain `co_return with_error{e};`: the
     `void` result requires that the promise type contains a function
     `return_void()` and if that is present it isn't possible to
     also have a `return_value(T)`.
@@ -1055,12 +1076,12 @@ can be exited:
     is possible to complete the coroutine in that state and have the
     coroutine be cleaned up. This approach is used when the awaited
     operation completes with `set_stopped()`. It is possible to
-    call `set_error(r, e)` for some receiver `r` and error `e` obtained via the
-    awaitable `a`. Thus, using
+    call `set_error(std::move(rcvr), err)` for some receiver `rcvr`
+    and error `err` obtained via the awaitable `a`. Thus, using
 
-        co_await with_error{error};
+        co_await with_error{err};
     
-    could complete with `set_error(r, error)`.
+    could complete with `set_error(std::move(rcvr), err)`.
 
     Using the same notation for awaiting outstanding operations and
     returning results from a coroutine is, however, somewhat
@@ -1073,11 +1094,11 @@ can be exited:
     When `a`'s `await_suspend()` is called, the coroutine is suspended
     and the operation can complete accordingly. Thus, using
 
-        co_yield with_error{error};
+        co_yield with_error{err};
     
-    could complete with `set_error(r, error)`. Using `co_yield` 
-    for the purpose of returning from a coroutine with a specific
-    result seems more expected than using `co_await`. 
+    could complete with `set_error(std::move(rcvr), err)`. Using
+    `co_yield` for the purpose of returning from a coroutine with
+    a specific result seems more expected than using `co_await`.
 
 There are techically viable options for returning an error from a
 coroutine without requiring exceptions. Whether any of them is
@@ -1100,13 +1121,14 @@ potential error return):
 
 The subexpression `into_expected(sender)` could turn the `set_value_t`
 and `set_error_t` into a suitable `std::expected<V, std::variant<E...>>`
-always reported using a `set_value_t` completion. The corresponding
-`std::expected` becomes the result of the `co_await`. Using `co_yield`
-with `when_error(e)` where `e` is an expected can then either produce
-`e.value()` as the reuslt of the `co_yield` expression or it can
-result in the coroutine completing with the error from `e.error()`.
-Using this approach produces a fairly compact approach to propagating
-the error retaining the type and without using exceptions.
+always reported using a `set_value_t` completion (so the `co_await`
+doesn't throw). The corresponding `std::expected` becomes the result
+of the `co_await`. Using `co_yield` with `when_error(exp)` where `exp`
+is an expected can then either produce `exp.value()` as the reuslt
+of the `co_yield` expression or it can result in the coroutine
+completing with the error from `exp.error()`.  Using this approach
+produces a fairly compact approach to propagating the error retaining
+the type and without using exceptions.
 
 ## Avoiding Stack Overflow
 
@@ -1137,16 +1159,16 @@ producing the completion signal. Some senders could be written such
 that they are awaiters as well such that symmetric transfer would
 help avoiding stack overflows but that isn't a general solution.
 
-When using scheduler affinity the transfer of control via scheduler
-which doesn't complete immediately does avoid the risc of stack
+When using scheduler affinity the transfer of control via a scheduler
+which doesn't complete immediately does avoid the risk of stack
 overflow: even when the `co_await`ed work immediately completes as
 part of the `await_suspend` call of the created awaiter the coroutine
 isn't immediately resumed. Instead, the work is scheduled and the
 coroutine is suspended. The thread unwinds its stack until it
 reaches its own scheduling and picks up the next entity to execute.
 
-When using `sync_wait(s)` the `run_loop`'s scheduler is used and
-it may very well just resume the just suspended corotuine: when
+When using `sync_wait(sndr)` the `run_loop`'s scheduler is used and
+it may very well just resume the just suspended coroutine: when
 there is scheduling happening as part of scheduler affinity it
 doesn't mean that work gets scheduled on a different thread! 
 
@@ -1154,10 +1176,10 @@ The problem with stack overflows does remain when the work resumes
 immediately despite using scheduler affinity. That may be the case
 when using an inline scheduler, i.e., a scheduler with an operation
 state whose `start()` immediately completes: the scheduled work gets
-executed as soon as `set_value()` is called.
+executed as soon as `set_value(std::move(rcvr))` is called.
 
 Another potential for stack overflows is when optimizing the behavior
-for work is known to not move to another scheduler: in that case
+for work which is known to not move to another scheduler: in that case
 there isn't really any need to use `continue_on` to get back to the
 scheduler where the operation was started! The execution remained
 on that scheduler all along. However, not rescheduling the work
@@ -1191,28 +1213,29 @@ implementation.  Instead, it can be composed based on other facilities.
 # Caveats
 
 The use of coroutines introduces some issues which are entirely
-independent of how specific coroutines are defined. Some these were
-brought up on prior discussions but they aren't anything which can
-be solved as part of any particular coroutine implementation. In
-particular:
+independent of how specific coroutines are defined. Some of these
+were brought up on prior discussions but they aren't anything which
+can be solved as part of any particular coroutine implementation.
+In particular:
 
 1. As `co_await`ing the result of an operation (or `co_yield`ing a
-    a value) may suspend a coroutine, there is a potential to
-    introduce problems when resources which meant to be held temporarily
+    value) may suspend a coroutine, there is a potential to
+    introduce problems when resources which are meant to be held temporarily
     are held when suspending. For example, holding a lock to a mutex
     while suspending a coroutine can result in a different thread
     trying to release the lock when the coroutine is resumed 
     (scheduler affinity will move the resumed coroutine
     to the same scheduler but not to the same thread).
 2. Destroying a coroutine is only safe when it is suspended. For
-    task implementation that means that it shall only call a
+    the task implementation that means that it shall only call a
     completion handler once the coroutine is suspended. That part
     is under the control of the coroutine implementation. However,
     there is no way to guard against users explicitly destroying a
-    coroutine from within its implementation or from another thread:
-    that's akin to destroying an object while it being used.
+    coroutine from within its implementation or from another thread
+    while it is not suspended: that's akin to destroying an object
+    while it being used.
 3. Debugging asynchronous code doesn't work with the normal approaches:
-    there is generally not suitable stack as work gets resumed from
+    there is generally no suitable stack as work gets resumed from
     some run loop which doesn't tell what set up the original work.
     To improve on this situation, _async stack traces_ linking
     different pieces of outstanding work together can help. At
@@ -1221,26 +1244,41 @@ particular:
     the video](https://youtu.be/nHy2cA9ZDbw?si=RDFty43InNoJxJNN)).
     Implementations should consider adding corresponding support
     and enhance tooling, e.g., debuggers, to pick up on async stack
-    traces.
+    traces. Howver, async stack support itself isn't really something
+    which one coroutine implementation can enable.
 
 While these issues are important this proposal isn't the right place
 to discuss them. Discussion of these issues should be delegated
 to suitable proposals wanting to improve this situation in some
 form.
 
-# Open Questions
+# Questions
 
-This section lists open questsions based on the design discussion
-above.
+This section lists questions based on the design discussion
+above. Each one has a recommendation and a vote is only needed
+if there opinions deviating from the recommendation.
 
-- Result type: expand `as_awaitable(sender)` to not require exactly
-    on `set_value_t(T...)` completion?
+- Result type: expand `as_awaitable(sndr)` to support more than
+    one `set_value_t(T...)` completion? Recommendation: no.
+- Result type: add transformation algorithms like `into_optional`,
+    `into_expected`? Recommendation: no, different proposals.
 - Scheduler affinity: should `lazy` support scheduler affinity?
+    Recommendation: yes.
 - Scheduler affinity: require a `get_scheduler()` query on the
-  receiver's environments?
+    receiver's environments? Recommendation: yes.
 - Scheduler affinity: add a definition for `inline_scheduler`
-  (using whatever name) to support disabling scheduler affinity?
-- **TODO** add the various other outstanding questions
+    (using whatever name) to support disabling scheduler affinity?
+    Recommendation: yes.
+- Allocator support: should `lazy` support allocators (default
+    `std::allocator<std::byte>`)? Recommendation: yes.
+- Error reporting: should it be possible to return an error
+    without throwing an exception? Recommendation: yes.
+- Error reporting: how should errors be reported? Recommendation:
+    using `co_yield with_error(e).
+- Error reporting: should `co_yield when_error(expected)` be
+    supported? Recommendation: yes (although weakly).
+- Clean-up: should asynchronous clean-up be supported? Recommendation:
+    no.
 
 # Implementation
 
@@ -1249,7 +1287,7 @@ and equipped with the relevant build, test, examples, and [ideally]
 documentation.
 
 An implementation of `lazy` as proposed in this document is available
-from [`beman::task26`](https://github.com/maikel/task). This
+from [`beman::lazy26`](https://github.com/bemanproject/lazy26). This
 implementation hasn't received much use, yet, as it is fairly new. It
 is setup to be buildable and provides some examples as a starting
 point for experimentation.
