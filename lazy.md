@@ -11,6 +11,8 @@ author:
       email: <dkuhl@bloomberg.net>
     - name: Maikel Nadolski
       email: <maikel.nadolski@gmail.com>
+source:
+    - https://github.com/bemanproject/lazy/doc/P3552.md
 toc: false
 ---
 
@@ -286,7 +288,7 @@ support. When creating a task there are two allocations.
 Also see [sender/receiver issue 241](https://github.com/cplusplus/sender-receiver/issues/241).
 
 Based on the prior work and discussions around corresponding coroutine
-support there a number of required or desired features (listed in
+support there is a number of required or desired features (listed in
 no particular order):
 
 1. A coroutine task needs to be awaiter/awaitable friendly, i.e., it
@@ -570,7 +572,7 @@ behavior (`rcvr` is the receiver the sender `sndr` is connected to):
     also completing with `set_stopped_t()`.
 2. When `sndr` completes with `set_error(std::move(rcvr), error)` the coroutine is resumed
     and the `co_await sndr` expression results in `error` being thrown as an
-    exceptions.
+    exceptions (with special treatment for `std::error_code`).
 3. When `sndr` completes with `set_value(std::move(rcvr), a...)` the expression `co_await sndr`
     produces a result corresponding the arguments to `set_value`:
 
@@ -665,7 +667,7 @@ naïvely:
     senders calls a completion function code may execute some lengthy
     operation on a context which is expected to keep a UI responsive
     or which is meant to deal with I/O.
-* Conversely, running a loop `co_await`ing some work may be seens as
+* Conversely, running a loop `co_await`ing some work may be seen as
     unproblematic but may actually easily cause a stack overflow if
     `co_await`ed work immediately completes (also
     [see below](#avoiding-stack-overflow)).
@@ -888,7 +890,7 @@ the allocator can be obtained from there:
 When `co_await`ing child operations these may want to access an
 environment. Ideally, the coroutine would expose the environment
 from the receiver it gets `connect`ed to. Doing so isn't directly
-possible because the coroutine types doesn't know about receiver
+possible because the coroutine types doesn't know about the receiver
 type which in turn determines the environment type. Also, the
 queries don't know the type they are going to return. Thus, some
 extra mechanisms are needed to provide an environment.
@@ -1159,7 +1161,7 @@ With senders it is also not possible to use symmetric transfer to
 combat the problem: to achieve the full generality and composing
 senders, there are still multiple function calls used, e.g., when
 producing the completion signal. Using `get_completion_behavior`
-from the propos [A sender query for completion behaviour](https://wg21.link/P3206)
+from the proposal [A sender query for completion behaviour](https://wg21.link/P3206)
 could allow detecting senders which complete synchronously. In these
 cases the stack overflow could be avoided relying on symmetric transfer.
 
@@ -1286,12 +1288,8 @@ if there opinions deviating from the recommendation.
 
 # Implementation
 
-**TODO** the implementation should be transferred to a Beman project
-and equipped with the relevant build, test, examples, and [ideally]
-documentation.
-
 An implementation of `lazy` as proposed in this document is available
-from [`beman::lazy26`](https://github.com/bemanproject/lazy26). This
+from [`beman::lazy`](https://github.com/bemanproject/lazy). This
 implementation hasn't received much use, yet, as it is fairly new. It
 is setup to be buildable and provides some examples as a starting
 point for experimentation.
