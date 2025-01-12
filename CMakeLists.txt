@@ -15,7 +15,7 @@ add_subdirectory(libunifex)
 list(
   APPEND
   xBEMAN_EXAMPLES
-  demo-async-lock
+  demo-error
 )
 list(
   APPEND

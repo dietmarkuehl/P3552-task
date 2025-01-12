@@ -21,6 +21,22 @@ namespace demo
 {
     namespace ex = beman::execution26;
 
+    template <std::size_t Start, typename Fun, typename V, std::size_t... I>
+    void sub_visit_helper(Fun& fun, V& v, std::index_sequence<I...>) {
+        using thunk_t = void(*)(Fun&, V&);
+        static constexpr thunk_t thunks[]{
+            (+[](Fun& fun, V&v){ fun(std::get<Start + I>(v)); })...
+        };
+        thunks[v.index() - Start](fun, v);
+    }
+
+    template <std::size_t Start, typename... T>
+    void sub_visit(auto&& fun, std::variant<T...>& v) {
+        if (v.index() < Start)
+            return;
+        sub_visit_helper<Start>(fun, v, std::make_index_sequence<sizeof...(T) - Start>{});
+    }
+
     template <typename Awaiter>
     concept awaiter = ex::sender<Awaiter>
         && requires(Awaiter&& awaiter) {
@@ -255,18 +271,11 @@ namespace demo
                         ex::set_value(std::move(this->receiver), std::move(r));
                     }
                     break;
-                case 2: // set_error
-                    {
-                        auto r(std::move(std::get<2>(result)));
+                default:
+                    sub_visit<2>([this](auto&& r) {
                         this->reset_handle();
                         ex::set_error(std::move(this->receiver), std::move(r));
-                    }
-                    break;
-                case 3: {
-                        auto r(std::move(std::get<3>(result)));
-                        this->reset_handle();
-                        ex::set_error(std::move(this->receiver), std::move(r));
-                    }
+                    }, result);
                     break;
                 }
             }
